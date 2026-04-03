@@ -59,18 +59,16 @@ python main.py --cfg amass --mode train --multimodal_threshold 0.4 --seed 6 --mi
 
 ## 🎥 Visualization
 Run the following scripts for visualization purpose:
-```
+
 python main.py --cfg h36m --mode pred --vis_row 3 --vis_col 10 --ckpt ./checkpoints/h36m_ckpt.pt
-```
-```
+
 python main.py --cfg humaneva --mode pred --vis_row 3 --vis_col 10 --ckpt ./checkpoints/humaneva_ckpt.pt
-```
-```
+
 python main.py --cfg amass --mode pred --vis_row 3 --vis_col 10 --ckpt ./checkpoints/amass_ckpt.pt
+
+
+
 ```
-
-
-
 ## 🌹 Acknowledgment
 Project structure is borrowed from [HumanMAC](https://github.com/LinghaoChan/HumanMAC). We would like to thank the authors for making their code publicly available.
 
