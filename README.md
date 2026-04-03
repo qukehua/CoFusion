@@ -18,7 +18,7 @@ python -m pip install -r requirement.txt
 
 ### 2. Datasets
 
-
+```
 data
 ├── data_3d_amass.npz
 ├── data_3d_amass_test.npz
