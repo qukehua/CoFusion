@@ -35,11 +35,12 @@ def pose_generator(data_set, model_select, diffusion, cfg, mode=None,
                     poses[f'TransFusion_{draw_order_indicator + 1}'] = gt
                     poses[f'TransFusion_{draw_order_indicator + 2}'] = gt
                 gt = np.expand_dims(gt, axis=0)
-                traj_np = gt[..., 1:, :].reshape([gt.shape[0], cfg.t_his + cfg.t_pred, -1])
+                traj_np, traj_cond_np = split_motion_inputs(gt, cfg)
 
             traj = tensor(traj_np, device=cfg.device, dtype=cfg.dtype)
+            traj_cond = tensor(traj_cond_np, device=cfg.device, dtype=cfg.dtype)
 
-            mode_dict, traj_dct, traj_dct_mod = sample_preprocessing(traj, cfg, mode=mode)
+            mode_dict, traj_dct, traj_dct_mod = sample_preprocessing(traj, cfg, mode=mode, traj_cond=traj_cond)
             sampled_motion = diffusion.sample_ddim(model_select,
                                                    traj_dct,
                                                    traj_dct_mod,

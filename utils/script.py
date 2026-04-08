@@ -3,7 +3,7 @@ import os
 import numpy as np
 import torch
 from tqdm import tqdm
-from utils import padding_traj
+from utils import padding_traj, split_motion_inputs
 from utils.visualization import render_animation
 from models.transformer import MotionTransformer
 from models.diffusion import Diffusion
@@ -22,6 +22,7 @@ def create_model_and_diffusion(cfg):
     """
     model = MotionTransformer(
         input_feats=3 * cfg.joint_num,  # 3 means x, y, z
+        cond_feats=3 * cfg.cond_joint_num,
         num_frames=cfg.n_pre,
         num_layers=cfg.num_layers,
         num_heads=cfg.num_heads,
@@ -101,7 +102,7 @@ def get_multimodal_gt_full(logger, dataset_multi_test, args, cfg):
             num_samples += 1
             data_group.append(data)
         data_group = np.concatenate(data_group, axis=0)
-        all_data = data_group[..., 1:, :].reshape(data_group.shape[0], data_group.shape[1], -1)
+        all_data, _ = split_motion_inputs(data_group, cfg)
         gt_group = all_data[:, cfg.t_his:, :]
 
     all_start_pose = all_data[:, cfg.t_his - 1, :]
@@ -146,7 +147,7 @@ def display_exp_setting(logger, cfg):
     logger.info('=' * 80)
 
 
-def sample_preprocessing(traj, cfg, mode):
+def sample_preprocessing(traj, cfg, mode, traj_cond=None):
     """
     This function is used to preprocess traj for sample_ddim().
     input : traj_seq, cfg, mode
@@ -155,18 +156,23 @@ def sample_preprocessing(traj, cfg, mode):
             traj_dct_mod
     """
 
+    if traj_cond is None:
+        traj_cond = traj
+
     if mode == 'pred':
         n = cfg.vis_col
         traj = traj.repeat(n, 1, 1)
+        traj_cond = traj_cond.repeat(n, 1, 1)
 
         mask = torch.zeros([n, cfg.t_his + cfg.t_pred, traj.shape[-1]]).to(cfg.device)
         for i in range(0, cfg.t_his):
             mask[:, i, :] = 1
 
         traj_pad = padding_traj(traj, cfg.padding, cfg.idx_pad, cfg.zero_index)
+        traj_cond_pad = padding_traj(traj_cond, cfg.padding, cfg.idx_pad, cfg.zero_index)
 
         traj_dct = torch.matmul(cfg.dct_m_all[:cfg.n_pre], traj_pad)
-        traj_dct_mod = copy.deepcopy(traj_dct)
+        traj_dct_mod = torch.matmul(cfg.dct_m_all[:cfg.n_pre], traj_cond_pad)
         if np.random.random() > cfg.mod_test:
             traj_dct_mod = None
 
@@ -182,9 +188,10 @@ def sample_preprocessing(traj, cfg, mode):
             mask[:, i, :] = 1
 
         traj_pad = padding_traj(traj, cfg.padding, cfg.idx_pad, cfg.zero_index)
+        traj_cond_pad = padding_traj(traj_cond, cfg.padding, cfg.idx_pad, cfg.zero_index)
 
         traj_dct = torch.matmul(cfg.dct_m_all[:cfg.n_pre], traj_pad)
-        traj_dct_mod = copy.deepcopy(traj_dct)
+        traj_dct_mod = torch.matmul(cfg.dct_m_all[:cfg.n_pre], traj_cond_pad)
         if np.random.random() > cfg.mod_test:
             traj_dct_mod = None
 

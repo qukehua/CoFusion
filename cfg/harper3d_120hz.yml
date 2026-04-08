@@ -25,6 +25,8 @@ mod_test: 1.0
 dct_norm_enable: False
 # Harper3D specific settings
 data_path: '/data3/user/qkh/HARPER/HARPER _3D panoptic'
-include_spot: False
+include_spot: True
+use_spot_condition: True
+predict_human_only: True
 fps: '120hz'
 

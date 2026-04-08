@@ -98,21 +98,27 @@ class Config:
         # harper3d specific config
         self.data_path = cfg.get('data_path', './data/harper3d')
         self.include_spot = cfg.get('include_spot', True)
+        self.predict_human_only = cfg.get('predict_human_only', False)
+        self.use_spot_condition = cfg.get('use_spot_condition', self.include_spot)
         self.fps = cfg.get('fps', '30hz')
         self.harper3d_multimodal_dir = cfg.get('harper3d_multimodal_dir', '/data3/user/qkh/DATASET/TransFusion/HARPER')
 
         # indirect variable
         if self.dataset == 'h36m':
             self.joint_num = 16
+            self.cond_joint_num = self.joint_num
+            self.output_total_joints = self.joint_num + 1
         elif self.dataset == 'amass':
             self.joint_num = 21
+            self.cond_joint_num = self.joint_num
+            self.output_total_joints = self.joint_num + 1
         elif self.dataset == 'harper3d':
-            # DatasetHarper3D uses 0-th joint as root and training discards it:
-            # model/diffusion operate on (joints - 1) joints => features dim = 3*(joints-1).
-            # So cfg.joint_num should be (total_joints - 1), not total_joints.
-            # 21 human joints + 23 spot joints = 44 total (if include_spot=True)
-            total_joints = 44 if self.include_spot else 21
-            self.joint_num = total_joints - 1
+            # Harper3D can use robot joints as conditioning while predicting only
+            # human motion. We therefore track output and conditioning sizes separately.
+            self.total_joint_num = 44 if self.include_spot else 21
+            self.output_total_joints = 21 if self.predict_human_only else self.total_joint_num
+            self.joint_num = self.output_total_joints - 1
+            self.cond_joint_num = self.total_joint_num - 1 if self.use_spot_condition else self.joint_num
             
             # Auto-construct multimodal paths based on fps if not explicitly set
             if self.multimodal_path is None or self.multimodal_path == 'auto':
@@ -127,4 +133,6 @@ class Config:
                 )
         else:
             self.joint_num = 14
+            self.cond_joint_num = self.joint_num
+            self.output_total_joints = self.joint_num + 1
         self.idx_pad, self.zero_index = generate_pad(self.padding, self.t_his, self.t_pred)

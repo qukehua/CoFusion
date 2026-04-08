@@ -47,6 +47,39 @@ def post_process(pred, cfg):
     return pred
 
 
+def get_prediction_traj(traj, cfg):
+    """
+    Select the joints that the model should predict.
+
+    For Harper3D we can condition on human + robot joints while still predicting
+    only the human body. In that case the first 21 joints are the human skeleton.
+    """
+    if getattr(cfg, 'dataset', None) == 'harper3d' and getattr(cfg, 'predict_human_only', False):
+        return traj[..., :cfg.output_total_joints, :]
+    return traj
+
+
+def flatten_motion_joints(traj):
+    """Drop the root joint and flatten xyz coordinates."""
+    return traj[..., 1:, :].reshape(*traj.shape[:-2], -1)
+
+
+def split_motion_inputs(traj, cfg):
+    """
+    Build model target and conditioning motion tensors from a raw joint sequence.
+
+    Returns:
+        target_traj: flattened trajectory used as diffusion target / prediction.
+        cond_traj: flattened trajectory used as conditioning input.
+    """
+    target_joints = get_prediction_traj(traj, cfg)
+    if getattr(cfg, 'dataset', None) == 'harper3d' and getattr(cfg, 'use_spot_condition', False):
+        cond_joints = traj
+    else:
+        cond_joints = target_joints
+    return flatten_motion_joints(target_joints), flatten_motion_joints(cond_joints)
+
+
 def get_dct_matrix(N, is_torch=True):
     dct_m = np.eye(N)
     for k in np.arange(N):

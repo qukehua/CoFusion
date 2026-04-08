@@ -136,6 +136,7 @@ class TemporalDiffusionTransformerDecoderLayer(nn.Module):
 class MotionTransformer(nn.Module):
     def __init__(self,
                  input_feats,
+                 cond_feats=None,
                  num_frames=240,
                  latent_dim=512,
                  ff_size=1024,
@@ -154,13 +155,17 @@ class MotionTransformer(nn.Module):
         self.dropout = dropout
         self.activation = activation
         self.input_feats = input_feats
+        self.cond_feats = input_feats if cond_feats is None else cond_feats
         self.time_embed_dim = latent_dim
         self.sequence_embedding = nn.Parameter(torch.randn(num_frames + 2, latent_dim))
+        # SE blocks operate along token dimension (time + 1 cond token).
+        # Keep it dynamic so different n_pre values (e.g., 20, 50, ...) all work.
+        self.se_dim = num_frames + 1
 
         # Input Embedding
         self.joint_embed = nn.Linear(self.input_feats, self.latent_dim)
         
-        self.cond_embed = nn.Linear(self.input_feats * self.num_frames, self.time_embed_dim)
+        self.cond_embed = nn.Linear(self.cond_feats * self.num_frames, self.time_embed_dim)
         
         self.time_embed = nn.Sequential(
             nn.Linear(self.latent_dim, self.time_embed_dim),
@@ -174,7 +179,8 @@ class MotionTransformer(nn.Module):
                     time_embed_dim=self.time_embed_dim,
                     ffn_dim=ff_size,
                     num_head=num_heads,
-                    dropout=dropout,)
+                    dropout=dropout,
+                    se_dim=self.se_dim,)
             for i in range(self.num_layers // 2)])
 
         self.mid_block = TemporalDiffusionTransformerDecoderLayer(
@@ -182,7 +188,8 @@ class MotionTransformer(nn.Module):
                                 time_embed_dim=self.time_embed_dim,
                                 ffn_dim=ff_size,
                                 num_head=num_heads,
-                                dropout=dropout,)
+                                dropout=dropout,
+                                se_dim=self.se_dim,)
 
         self.out_blocks = nn.ModuleList([
             TemporalDiffusionTransformerDecoderLayer(
@@ -191,7 +198,8 @@ class MotionTransformer(nn.Module):
                     ffn_dim=ff_size,
                     num_head=num_heads,
                     dropout=dropout,
-                    skip=True)
+                    skip=True,
+                    se_dim=self.se_dim)
             for i in range(self.num_layers // 2)])
                 
         self.out = zero_module(nn.Linear(self.latent_dim, self.input_feats))

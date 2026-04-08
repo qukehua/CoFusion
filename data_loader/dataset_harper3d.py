@@ -53,8 +53,9 @@ class DatasetHarper3D(Dataset):
         
         if self.include_spot:
             # Spot robot has 23 joints, add them after human joints
-            # Spot is independent, so root parent is -1 (shifted by 21)
-            spot_parents = [-1] + [i + 21 for i in range(22)]
+            # Define the Spot chain in local indices first, then shift by 21 so
+            # the robot subtree starts after the 21 human joints.
+            spot_parents = [-1] + list(range(22))
             all_parents = human_parents + [p + 21 if p >= 0 else -1 for p in spot_parents]
             self.num_human_joints = 21
             self.num_spot_joints = 23

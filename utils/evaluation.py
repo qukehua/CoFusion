@@ -21,12 +21,11 @@ def compute_stats(diffusion, multimodal_dict, model, logger, cfg):
     """
 
     def get_prediction(data, model_select):
-        traj_np = data[..., 1:, :].transpose([0, 2, 3, 1])
+        traj_np, traj_cond_np = split_motion_inputs(data, cfg)
         traj = tensor(traj_np, device=cfg.device, dtype=torch.float32)
-        traj = traj.reshape([traj.shape[0], -1, traj.shape[-1]]).transpose(1, 2)
-        # traj.shape: [*, t_his + t_pre, 3 * joints_num]
+        traj_cond = tensor(traj_cond_np, device=cfg.device, dtype=torch.float32)
 
-        mode_dict, traj_dct, traj_dct_cond = sample_preprocessing(traj, cfg, mode='metrics')
+        mode_dict, traj_dct, traj_dct_cond = sample_preprocessing(traj, cfg, mode='metrics', traj_cond=traj_cond)
         sampled_motion = diffusion.sample_ddim(model_select,
                                                traj_dct,
                                                traj_dct_cond,

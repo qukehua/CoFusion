@@ -120,13 +120,12 @@ class Trainer:
                     desc=f"Epoch {self.iter}", leave=False, unit="batch")
         for traj_np in pbar:
             with torch.no_grad():
-                # (N, t_his + t_pre, joints, 3) -> (N, t_his + t_pre, 3 * (joints - 1))
-                # discard the root joint and combine xyz coordinate
-                traj_np = traj_np[..., 1:, :].reshape([traj_np.shape[0], self.cfg.t_his + self.cfg.t_pred, -1])
+                traj_np, traj_cond_np = split_motion_inputs(traj_np, self.cfg)
                 traj = tensor(traj_np, device=self.cfg.device, dtype=self.cfg.dtype)
-                traj_pad = padding_traj(traj, self.cfg.padding, self.cfg.idx_pad, self.cfg.zero_index)
+                traj_cond = tensor(traj_cond_np, device=self.cfg.device, dtype=self.cfg.dtype)
+                traj_cond_pad = padding_traj(traj_cond, self.cfg.padding, self.cfg.idx_pad, self.cfg.zero_index)
                 traj_dct = torch.matmul(self.cfg.dct_m_all[:self.cfg.n_pre], traj)
-                traj_dct_mod = torch.matmul(self.cfg.dct_m_all[:self.cfg.n_pre], traj_pad)
+                traj_dct_mod = torch.matmul(self.cfg.dct_m_all[:self.cfg.n_pre], traj_cond_pad)
 
                 if np.random.random() > self.cfg.mod_train:
                     traj_dct_mod = None
@@ -152,7 +151,7 @@ class Trainer:
             # Update progress bar with current loss
             pbar.set_postfix({'loss': f'{self.train_losses.avg:.4f}'})
 
-            del loss, traj, traj_dct, traj_dct_mod, traj_pad, traj_np
+            del loss, traj, traj_cond, traj_dct, traj_dct_mod, traj_cond_pad, traj_np, traj_cond_np
 
     def after_train_step(self):
         self.lr_scheduler.step()
@@ -182,15 +181,13 @@ class Trainer:
     def run_val_step(self):
         for traj_np in self.generator_val:
             with torch.no_grad():
-                # (N, t_his + t_pre, joints, 3) -> (N, t_his + t_pre, 3 * (joints - 1))
-                # discard the root joint and combine xyz coordinate
-                traj_np = traj_np[..., 1:, :].reshape([traj_np.shape[0], self.cfg.t_his + self.cfg.t_pred, -1])
+                traj_np, traj_cond_np = split_motion_inputs(traj_np, self.cfg)
                 traj = tensor(traj_np, device=self.cfg.device, dtype=self.cfg.dtype)
-                traj_pad = padding_traj(traj, self.cfg.padding, self.cfg.idx_pad,
-                                        self.cfg.zero_index)
-                # [n_pre × (t_his + t_pre)] matmul [(t_his + t_pre) × 3 * (joints - 1)]
+                traj_cond = tensor(traj_cond_np, device=self.cfg.device, dtype=self.cfg.dtype)
+                traj_cond_pad = padding_traj(traj_cond, self.cfg.padding, self.cfg.idx_pad,
+                                             self.cfg.zero_index)
                 traj_dct = torch.matmul(self.cfg.dct_m_all[:self.cfg.n_pre], traj)
-                traj_dct_mod = torch.matmul(self.cfg.dct_m_all[:self.cfg.n_pre], traj_pad)
+                traj_dct_mod = torch.matmul(self.cfg.dct_m_all[:self.cfg.n_pre], traj_cond_pad)
 
                 if np.random.random() > self.cfg.mod_train:
                     traj_dct_mod = None
@@ -203,7 +200,7 @@ class Trainer:
                 self.val_losses.update(loss.item())
                 self.tb_logger.add_scalar('Loss/val', loss.item(), self.iter)
 
-            del loss, traj, traj_dct, traj_dct_mod, traj_pad, traj_np
+            del loss, traj, traj_cond, traj_dct, traj_dct_mod, traj_cond_pad, traj_np, traj_cond_np
 
     def after_val_step(self):
         self.logger.info('====> Epoch: {} Time: {:.2f} Val Loss: {}'.format(self.iter,
