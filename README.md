@@ -69,8 +69,6 @@ python main.py --cfg h36m --mode pred --vis_row 3 --vis_col 10 --ckpt ./checkpoi
 
 ```
 ## 🌹 Acknowledgment
-Project structure is borrowed from [HumanMAC](https://github.com/LinghaoChan/HumanMAC). We would like to thank the authors for making their code publicly available.
+Project structure is borrowed from [TransFusion](https://github.com/sibotian96/TransFusion). We would like to thank the authors for making their code publicly available.
 
 
-## 📚 License
-The software in this repository is freely available for free non-commercial use (see [license](https://github.com/sibotian96/TransFusion/blob/main/LICENSE) for further details).
