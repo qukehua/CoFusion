@@ -1,5 +1,6 @@
 import argparse
 import sys
+import os
 from utils import create_logger, seed_set
 from utils.demo_visualize import demo_visualize
 from utils.script import *
@@ -19,6 +20,16 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
     print("wandb not installed. Run 'pip install wandb' to enable wandb logging.")
+
+
+def _to_wandb_safe(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_to_wandb_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _to_wandb_safe(v) for k, v in value.items()}
+    return str(value)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -92,6 +103,15 @@ if __name__ == '__main__':
             config=wandb_config,
             dir=cfg.cfg_dir,
         )
+        cfg_for_wandb = {}
+        for k, v in cfg.__dict__.items():
+            if 'dct_m' in k or 'idct_m' in k:
+                continue
+            cfg_for_wandb[k] = _to_wandb_safe(v)
+        wandb.config.update(cfg_for_wandb, allow_val_change=True)
+        cfg_file = os.path.join('cfg', f'{args.cfg}.yml')
+        if os.path.exists(cfg_file):
+            wandb.save(cfg_file, policy='now')
         wandb_logger = wandb
         logger.info(f"wandb initialized: {args.wandb_project}/{run_name}")
     
@@ -123,9 +143,13 @@ if __name__ == '__main__':
             multimodal_dict = get_multimodal_gt_full(logger, dataset['test'], args, cfg)
         else:
             multimodal_dict = get_multimodal_gt_full(logger, dataset_multi_test, args, cfg)
-        compute_stats(diffusion, multimodal_dict, model, logger, cfg)
+        compute_stats(diffusion, multimodal_dict, model, logger, cfg, wandb_logger=wandb_logger)
+        if wandb_logger is not None:
+            wandb.finish()
 
     else:
         ckpt = torch.load(args.ckpt)
         model.load_state_dict(ckpt)
         demo_visualize(args.mode, cfg, model, diffusion, dataset)
+        if wandb_logger is not None:
+            wandb.finish()

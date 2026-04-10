@@ -14,7 +14,7 @@ ones = torch.ones
 zeros = torch.zeros
 
 
-def compute_stats(diffusion, multimodal_dict, model, logger, cfg):
+def compute_stats(diffusion, multimodal_dict, model, logger, cfg, wandb_logger=None):
     """
     The GPU is strictly needed because we need to give predictions for multiple samples in parallel and repeat for
     several (K=50) times.
@@ -43,6 +43,11 @@ def compute_stats(diffusion, multimodal_dict, model, logger, cfg):
 
     stats_names = ['APD', 'ADE', 'FDE', 'MMADE', 'MMFDE', 'ADE-m', 'FDE-m', 'MMADE-m', 'MMFDE-m', 'ADE-w', 'FDE-w', 'MMADE-w', 'MMFDE-w']
     stats_meter = {x: {y: AverageMeter() for y in ['TransFusion']} for x in stats_names}
+
+    def _to_float(v):
+        if hasattr(v, 'item'):
+            return float(v.item())
+        return float(v)
 
     K = 50
     pred = []
@@ -93,6 +98,13 @@ def compute_stats(diffusion, multimodal_dict, model, logger, cfg):
                     [f'{x}: {y.avg:.4f}' for x, y in stats_meter[stats].items()]
                 )
                 logger.info(str_stats)
+            if wandb_logger is not None:
+                eval_metrics = {
+                    f'eval/{stats}': _to_float(stats_meter[stats]['TransFusion'].avg)
+                    for stats in stats_names
+                }
+                wandb_logger.log(eval_metrics)
+                wandb_logger.summary.update(eval_metrics)
             pred = []
 
     # save stats in csv
@@ -114,3 +126,7 @@ def compute_stats(diffusion, multimodal_dict, model, logger, cfg):
         df2 = pd.read_csv(file_stat % cfg.result_dir)
         df = pd.concat([df2, df1['TransFusion']], axis=1, ignore_index=True)
         df.to_csv(file_stat % cfg.result_dir, index=False)
+
+    if wandb_logger is not None:
+        wandb_logger.save(file_latest % cfg.result_dir)
+        wandb_logger.save(file_stat % cfg.result_dir)
