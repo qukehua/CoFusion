@@ -64,6 +64,34 @@ def flatten_motion_joints(traj):
     return traj[..., 1:, :].reshape(*traj.shape[:-2], -1)
 
 
+def motion_to_velocity(traj):
+    """
+    Convert position sequence [B, T, D] (or [T, D]) into frame-to-frame velocity.
+
+    The first frame has no previous frame, so we use zeros there and then
+    standard backward differences for the remaining frames.
+    """
+    if isinstance(traj, torch.Tensor):
+        vel = torch.zeros_like(traj)
+        vel[..., 1:, :] = traj[..., 1:, :] - traj[..., :-1, :]
+    else:
+        vel = np.zeros_like(traj)
+        vel[..., 1:, :] = traj[..., 1:, :] - traj[..., :-1, :]
+    return vel
+
+
+def get_position_inputs(traj, cfg):
+    """
+    Build flattened position trajectories for target and condition branches.
+    """
+    target_joints = get_prediction_traj(traj, cfg)
+    if getattr(cfg, 'dataset', None) == 'harper3d' and getattr(cfg, 'use_spot_condition', False):
+        cond_joints = traj
+    else:
+        cond_joints = target_joints
+    return flatten_motion_joints(target_joints), flatten_motion_joints(cond_joints)
+
+
 def split_motion_inputs(traj, cfg):
     """
     Build model target and conditioning motion tensors from a raw joint sequence.
@@ -72,12 +100,43 @@ def split_motion_inputs(traj, cfg):
         target_traj: flattened trajectory used as diffusion target / prediction.
         cond_traj: flattened trajectory used as conditioning input.
     """
-    target_joints = get_prediction_traj(traj, cfg)
-    if getattr(cfg, 'dataset', None) == 'harper3d' and getattr(cfg, 'use_spot_condition', False):
-        cond_joints = traj
-    else:
-        cond_joints = target_joints
-    return flatten_motion_joints(target_joints), flatten_motion_joints(cond_joints)
+    target_traj, cond_traj = get_position_inputs(traj, cfg)
+    if getattr(cfg, 'use_velocity_input', False):
+        target_traj = motion_to_velocity(target_traj)
+        cond_traj = motion_to_velocity(cond_traj)
+    return target_traj, cond_traj
+
+
+def reconstruct_from_velocity(motion, reference_traj, cfg):
+    """
+    Convert model output back to position features when the model operates on velocity.
+
+    Args:
+        motion: [B, T, D] predicted motion in model space
+        reference_traj: raw joint sequence [B_ref, T, J, 3] (or compatible)
+    Returns:
+        [B, T, D] position features
+    """
+    if not getattr(cfg, 'use_velocity_input', False):
+        return motion
+
+    ref_pos, _ = get_position_inputs(reference_traj, cfg)
+    ref_first = ref_pos[:, :1, :]
+
+    if isinstance(motion, torch.Tensor):
+        if not isinstance(ref_first, torch.Tensor):
+            ref_first = torch.as_tensor(ref_first, device=motion.device, dtype=motion.dtype)
+        else:
+            ref_first = ref_first.to(device=motion.device, dtype=motion.dtype)
+        if ref_first.shape[0] == 1 and motion.shape[0] != 1:
+            ref_first = ref_first.repeat(motion.shape[0], 1, 1)
+        return torch.cumsum(motion, dim=1) + ref_first
+
+    if isinstance(ref_first, torch.Tensor):
+        ref_first = ref_first.detach().cpu().numpy()
+    if ref_first.shape[0] == 1 and motion.shape[0] != 1:
+        ref_first = np.repeat(ref_first, motion.shape[0], axis=0)
+    return np.cumsum(motion, axis=1) + ref_first
 
 
 def get_dct_matrix(N, is_torch=True):

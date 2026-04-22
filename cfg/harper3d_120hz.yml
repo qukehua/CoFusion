@@ -1,10 +1,11 @@
 dataset: 'harper3d'
+seed: 0
 # 120hz: 100帧 = 0.83秒历史, 400帧 = 3.33秒预测 (与30hz时间等效)
 t_his: 100
 t_pred: 400
 batch_size: 32  # 降低batch_size因为序列更长
 eval_batch_size: 16  # chunked eval to avoid OOM during DDIM sampling
-num_epoch: 101
+num_epoch: 100
 # scaled from [100, 200, 300, 400, 500] for a 101-epoch run
 milestone: [20, 40, 60, 80, 100]
 save_model_interval: 20
@@ -27,10 +28,15 @@ num_heads: 8
 latent_dims: 512
 dropout: 0.2
 # mod_train: 0.9
-mod_train: 0.8
+mod_train: 0.9  # 0.7 for human joints omly  0.9 for human and robots joints
 mod_test: 1.0
 dct_norm_enable: False
 disable_tensorboard: True
+use_data_aug: False
+aug_rotate_prob: 0.5
+aug_reverse_prob: 0.3
+use_velocity_input: False
+velocity_loss_weight: 0.1
 # Harper3D specific settings
 data_path: '/data3/user/qkh/HARPER/HARPER _3D panoptic'
 include_spot: True   

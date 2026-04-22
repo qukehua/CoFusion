@@ -3,9 +3,9 @@ import os
 import numpy as np
 import torch
 from tqdm import tqdm
-from utils import padding_traj, split_motion_inputs
+from utils import padding_traj, split_motion_inputs, get_position_inputs
 from utils.visualization import render_animation
-from models.transformer import MotionTransformer
+from models.default import MotionTransformer
 from models.condition_two_stage import MotionTransformerTwoStage
 from models.diffusion import Diffusion
 from data_loader.dataset_h36m import DatasetH36M
@@ -21,7 +21,11 @@ def create_model_and_diffusion(cfg):
     """
     create TransLinear model and Diffusion
     """
-    model_cls = MotionTransformerTwoStage if cfg.model_variant == 'two_stage' else MotionTransformer
+    use_two_stage = cfg.model_variant == 'two_stage' and cfg.stage1_num_layers != 0
+    if use_two_stage:
+        model_cls = MotionTransformerTwoStage
+    else:
+        model_cls = MotionTransformer
     model = model_cls(
         input_feats=3 * cfg.joint_num,  # 3 means x, y, z
         cond_feats=3 * cfg.cond_joint_num,
@@ -67,10 +71,14 @@ def dataset_split(cfg):
     if cfg.dataset == 'harper3d':
         dataset = dataset_cls('train', cfg.t_his, cfg.t_pred, actions='all',
                               data_path=cfg.data_path, include_spot=cfg.include_spot,
-                              fps=cfg.fps)
+                              fps=cfg.fps,
+                              use_data_aug=cfg.use_data_aug,
+                              aug_rotate_prob=cfg.aug_rotate_prob,
+                              aug_reverse_prob=cfg.aug_reverse_prob)
         dataset_test = dataset_cls('test', cfg.t_his, cfg.t_pred, actions='all',
                                    data_path=cfg.data_path, include_spot=cfg.include_spot,
-                                   fps=cfg.fps)
+                                   fps=cfg.fps,
+                                   use_data_aug=False)
         dataset_multi_test = dataset_cls_multi('test', cfg.t_his, cfg.t_pred,
                                                data_path=cfg.data_path,
                                                include_spot=cfg.include_spot,
@@ -95,7 +103,7 @@ def get_multimodal_gt_full(logger, dataset_multi_test, args, cfg):
     if cfg.dataset == 'amass':
         data_group = dataset_multi_test.data
         num_samples = data_group.shape[0]
-        all_data = data_group[..., 1:, :].reshape(data_group.shape[0], data_group.shape[1], -1)
+        all_data, _ = get_position_inputs(data_group, cfg)
         gt_group = all_data[:, cfg.t_his:, :]
 
     else:
@@ -106,7 +114,7 @@ def get_multimodal_gt_full(logger, dataset_multi_test, args, cfg):
             num_samples += 1
             data_group.append(data)
         data_group = np.concatenate(data_group, axis=0)
-        all_data, _ = split_motion_inputs(data_group, cfg)
+        all_data, _ = get_position_inputs(data_group, cfg)
         gt_group = all_data[:, cfg.t_his:, :]
 
     all_start_pose = all_data[:, cfg.t_his - 1, :]

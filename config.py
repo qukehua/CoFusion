@@ -60,6 +60,7 @@ class Config:
         # common
         self.dataset = cfg.get('dataset', 'h36m')
         self.exp_name = cfg.get('exp_name', None)
+        self.seed = cfg.get('seed', 0)
         self.batch_size = cfg['batch_size']
         self.eval_batch_size = cfg.get('eval_batch_size', self.batch_size)
         self.normalize_data = cfg.get('normalize_data', False)
@@ -74,6 +75,11 @@ class Config:
         self.gamma = cfg.get('gamma', 0.8)
         self.save_model_interval = cfg.get('save_model_interval', 100)
         self.disable_tensorboard = cfg.get('disable_tensorboard', False)
+        self.use_data_aug = cfg.get('use_data_aug', False)
+        self.aug_rotate_prob = cfg.get('aug_rotate_prob', 0.5)
+        self.aug_reverse_prob = cfg.get('aug_reverse_prob', 0.3)
+        self.use_velocity_input = cfg.get('use_velocity_input', False)
+        self.velocity_loss_weight = cfg.get('velocity_loss_weight', 0.0)
 
         self.n_pre = cfg['n_pre']
         self.multimodal_path = cfg.get('multimodal_path', None)

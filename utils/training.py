@@ -49,8 +49,12 @@ class Trainer:
 
         self.generator_val = None
         self.val_losses = None
+        self.val_noise_losses = None
+        self.val_velocity_losses = None
         self.t_s = None
         self.train_losses = None
+        self.train_noise_losses = None
+        self.train_velocity_losses = None
         self.criterion = None
         self.lr_scheduler = None
         self.optimizer = None
@@ -75,6 +79,17 @@ class Trainer:
         else:
             self.ema_model = None
             self.ema_setup = None
+
+    def compute_velocity_aux_loss(self, x_t, t, predicted_noise, traj):
+        if getattr(self.cfg, 'velocity_loss_weight', 0.0) <= 0:
+            return None
+
+        alpha_hat = self.diffusion.alpha_hat[t][:, None, None]
+        predicted_x0 = (x_t - torch.sqrt(1. - alpha_hat) * predicted_noise) / torch.sqrt(alpha_hat)
+        traj_est = torch.matmul(self.cfg.idct_m_all[:, :self.cfg.n_pre], predicted_x0)
+        pred_vel = motion_to_velocity(traj_est)
+        gt_vel = motion_to_velocity(traj)
+        return self.criterion(pred_vel, gt_vel)
 
     def loop(self):
         self.before_train()
@@ -112,6 +127,8 @@ class Trainer:
                                                                         batch_size=self.cfg.batch_size)
         self.t_s = time.time()
         self.train_losses = AverageMeter()
+        self.train_noise_losses = AverageMeter()
+        self.train_velocity_losses = AverageMeter()
         self.logger.info(f"Starting training epoch {self.iter}:")
 
     def run_train_step(self):
@@ -134,7 +151,11 @@ class Trainer:
             t = self.diffusion.sample_timesteps(traj.shape[0]).to(self.cfg.device)
             x_t, noise = self.diffusion.noise_motion(traj_dct, t)
             predicted_noise = self.model(x_t, t, mod=traj_dct_mod)
-            loss = self.criterion(predicted_noise, noise)
+            noise_loss = self.criterion(predicted_noise, noise)
+            velocity_loss = self.compute_velocity_aux_loss(x_t, t, predicted_noise, traj)
+            loss = noise_loss
+            if velocity_loss is not None:
+                loss = loss + self.cfg.velocity_loss_weight * velocity_loss
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -146,27 +167,42 @@ class Trainer:
                 ema.step_ema(ema_model, self.model)
 
             self.train_losses.update(loss.item())
+            self.train_noise_losses.update(noise_loss.item())
+            self.train_velocity_losses.update(0.0 if velocity_loss is None else velocity_loss.item())
             if self.tb_logger is not None:
                 self.tb_logger.add_scalar('Loss/train', loss.item(), self.iter)
+                self.tb_logger.add_scalar('Loss/train_noise', noise_loss.item(), self.iter)
+                if velocity_loss is not None:
+                    self.tb_logger.add_scalar('Loss/train_velocity', velocity_loss.item(), self.iter)
             
             # Update progress bar with current loss
-            pbar.set_postfix({'loss': f'{self.train_losses.avg:.4f}'})
+            pbar.set_postfix({
+                'loss': f'{self.train_losses.avg:.4f}',
+                'noise': f'{self.train_noise_losses.avg:.4f}',
+                'vel': f'{self.train_velocity_losses.avg:.4f}'
+            })
 
-            del loss, traj, traj_cond, traj_dct, traj_dct_mod, traj_cond_pad, traj_np, traj_cond_np
+            del loss, noise_loss, velocity_loss, traj, traj_cond, traj_dct, traj_dct_mod, traj_cond_pad, traj_np, traj_cond_np
 
     def after_train_step(self):
         self.lr_scheduler.step()
         self.lrs.append(self.optimizer.param_groups[0]['lr'])
         self.logger.info(
-            '====> Epoch: {} Time: {:.2f} Train Loss: {} lr: {:.5f}'.format(self.iter,
-                                                                            time.time() - self.t_s,
-                                                                            self.train_losses.avg,
-                                                                            self.lrs[-1]))
+            '====> Epoch: {} Time: {:.2f} Train Loss: {} Noise Loss: {} Velocity Loss: {} lr: {:.5f}'.format(
+                self.iter,
+                time.time() - self.t_s,
+                self.train_losses.avg,
+                self.train_noise_losses.avg,
+                self.train_velocity_losses.avg,
+                self.lrs[-1]
+            ))
         # Log to wandb
         if self.wandb_logger is not None:
             self.wandb_logger.log({
                 'epoch': self.iter,
                 'train/loss': self.train_losses.avg,
+                'train/noise_loss': self.train_noise_losses.avg,
+                'train/velocity_loss': self.train_velocity_losses.avg,
                 'train/lr': self.lrs[-1],
                 'train/time': time.time() - self.t_s,
             }, step=self.iter)
@@ -175,6 +211,8 @@ class Trainer:
         self.model.eval()
         self.t_s = time.time()
         self.val_losses = AverageMeter()
+        self.val_noise_losses = AverageMeter()
+        self.val_velocity_losses = AverageMeter()
         self.generator_val = self.dataset['test'].sampling_generator(num_samples=self.cfg.num_val_data_sample,
                                                                      batch_size=self.cfg.batch_size,
                                                                      aug=False)
@@ -208,13 +246,22 @@ class Trainer:
                     t = self.diffusion.sample_timesteps(traj.shape[0]).to(self.cfg.device)
                     x_t, noise = self.diffusion.noise_motion(traj_dct, t)
                     predicted_noise = self.model(x_t, t, mod=traj_dct_mod)
-                    loss = self.criterion(predicted_noise, noise)
+                    noise_loss = self.criterion(predicted_noise, noise)
+                    velocity_loss = self.compute_velocity_aux_loss(x_t, t, predicted_noise, traj)
+                    loss = noise_loss
+                    if velocity_loss is not None:
+                        loss = loss + self.cfg.velocity_loss_weight * velocity_loss
 
                     self.val_losses.update(loss.item())
+                    self.val_noise_losses.update(noise_loss.item())
+                    self.val_velocity_losses.update(0.0 if velocity_loss is None else velocity_loss.item())
                     if self.tb_logger is not None:
                         self.tb_logger.add_scalar('Loss/val', loss.item(), self.iter)
+                        self.tb_logger.add_scalar('Loss/val_noise', noise_loss.item(), self.iter)
+                        if velocity_loss is not None:
+                            self.tb_logger.add_scalar('Loss/val_velocity', velocity_loss.item(), self.iter)
 
-                del loss, traj, traj_cond, traj_dct, traj_dct_mod, traj_cond_pad, traj_np, traj_cond_np
+                del loss, noise_loss, velocity_loss, traj, traj_cond, traj_dct, traj_dct_mod, traj_cond_pad, traj_np, traj_cond_np
         finally:
             np.random.set_state(np_state)
             torch.random.set_rng_state(torch_state)
@@ -222,13 +269,20 @@ class Trainer:
                 torch.cuda.set_rng_state_all(cuda_states)
 
     def after_val_step(self):
-        self.logger.info('====> Epoch: {} Time: {:.2f} Val Loss: {}'.format(self.iter,
-                                                                            time.time() - self.t_s,
-                                                                            self.val_losses.avg))
+        self.logger.info(
+            '====> Epoch: {} Time: {:.2f} Val Loss: {} Noise Loss: {} Velocity Loss: {}'.format(
+                self.iter,
+                time.time() - self.t_s,
+                self.val_losses.avg,
+                self.val_noise_losses.avg,
+                self.val_velocity_losses.avg
+            ))
         # Log to wandb
         if self.wandb_logger is not None:
             self.wandb_logger.log({
                 'val/loss': self.val_losses.avg,
+                'val/noise_loss': self.val_noise_losses.avg,
+                'val/velocity_loss': self.val_velocity_losses.avg,
                 'val/time': time.time() - self.t_s,
             }, step=self.iter)
         

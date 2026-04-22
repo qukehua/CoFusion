@@ -38,7 +38,7 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', type=str, default=None, help='custom experiment folder name')
     parser.add_argument('--mode', default='train', help='train / eval / pred')
     parser.add_argument('--iter', type=int, default=0)
-    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--device', type=str, default=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
     parser.add_argument('--multimodal_threshold', type=float, default=0.5)
     parser.add_argument('--milestone', type=list, default=None)
@@ -55,11 +55,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     """setup"""
-    seed_set(args.seed)
-    # seed_set(6) 
-
     cfg = Config(f'{args.cfg}', test=(args.mode != 'train'))
     cfg = update_config(cfg, vars(args))
+    seed_set(cfg.seed)
 
     if cfg.dataset == 'amass':
         # Avoid loading the large AMASS train split for eval/pred to save time & RAM.
@@ -94,9 +92,9 @@ if __name__ == '__main__':
             'num_heads': cfg.num_heads,
             'latent_dims': cfg.latent_dims,
             'dropout': cfg.dropout,
-            'seed': args.seed,
+            'seed': cfg.seed,
         }
-        run_name = args.wandb_name if args.wandb_name else (cfg.exp_name if cfg.exp_name else f"{cfg.dataset}_{args.seed}")
+        run_name = args.wandb_name if args.wandb_name else (cfg.exp_name if cfg.exp_name else f"{cfg.dataset}_{cfg.seed}")
         wandb.init(
             project=args.wandb_project,
             name=run_name,

@@ -16,7 +16,8 @@ def timestep_embedding(timesteps, dim, max_period=10000):
 
 
 def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    view_shape = [shift.shape[0]] + [1] * (x.ndim - 2) + [shift.shape[-1]]
+    return x * (1 + scale.view(*view_shape)) + shift.view(*view_shape)
 
 
 def get_1d_sincos_pos_embed(length, dim):
@@ -130,34 +131,60 @@ class GraphConvBlock(nn.Module):
         return x
 
 
-class DiTBlock(nn.Module):
+class TokenAttentionPool(nn.Module):
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.norm = nn.LayerNorm(hidden_size)
+        self.score = nn.Linear(hidden_size, 1)
+
+    def forward(self, x):
+        weights = self.score(self.norm(x)).squeeze(-1)
+        weights = torch.softmax(weights, dim=-1)
+        return torch.sum(x * weights.unsqueeze(-1), dim=1)
+
+
+class SpatialTemporalDiTBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, dropout=0.0):
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(hidden_size, num_heads=num_heads, dropout=dropout)
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm_spatial = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.spatial_attn = Attention(hidden_size, num_heads=num_heads, dropout=dropout)
+        self.norm_temporal = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.temporal_attn = Attention(hidden_size, num_heads=num_heads, dropout=dropout)
+        self.norm_mlp = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.mlp = Mlp(hidden_size, int(hidden_size * mlp_ratio), dropout=dropout)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            nn.Linear(hidden_size, 9 * hidden_size, bias=True)
         )
 
     def forward(self, x, c):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        shift_spatial, scale_spatial, gate_spatial, shift_temporal, scale_temporal, gate_temporal, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(9, dim=1)
+        bsz, seq_len, joint_num, hidden = x.shape
+
+        spatial_in = modulate(self.norm_spatial(x), shift_spatial, scale_spatial)
+        spatial_in = spatial_in.reshape(bsz * seq_len, joint_num, hidden)
+        spatial_out = self.spatial_attn(spatial_in).reshape(bsz, seq_len, joint_num, hidden)
+        x = x + gate_spatial.view(bsz, 1, 1, hidden) * spatial_out
+
+        temporal_in = modulate(self.norm_temporal(x), shift_temporal, scale_temporal)
+        temporal_in = temporal_in.transpose(1, 2).reshape(bsz * joint_num, seq_len, hidden)
+        temporal_out = self.temporal_attn(temporal_in)
+        temporal_out = temporal_out.reshape(bsz, joint_num, seq_len, hidden).transpose(1, 2)
+        x = x + gate_temporal.view(bsz, 1, 1, hidden) * temporal_out
+
+        x = x + gate_mlp.view(bsz, 1, 1, hidden) * self.mlp(modulate(self.norm_mlp(x), shift_mlp, scale_mlp))
         return x
 
 
-class FinalLayer(nn.Module):
-    def __init__(self, hidden_size, out_size):
+class FinalLayerJoint(nn.Module):
+    def __init__(self, hidden_size):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
-        self.out_proj = nn.Linear(hidden_size, out_size, bias=True)
+        self.out_proj = nn.Linear(hidden_size, 3, bias=True)
 
     def forward(self, x, c):
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
@@ -213,7 +240,7 @@ class MotionTransformerTwoStage(nn.Module):
                 f"stage1_num_layers must be in [1, {num_layers - 1}], got {self.stage1_num_layers}."
             )
 
-        self.x_embedder = nn.Linear(self.input_feats, latent_dim)
+        self.motion_joint_embed = nn.Linear(3, latent_dim)
         self.t_embedder = nn.Sequential(
             nn.Linear(latent_dim, latent_dim),
             nn.SiLU(),
@@ -225,16 +252,33 @@ class MotionTransformerTwoStage(nn.Module):
             GraphConvBlock(self.human_cond_joint_num, latent_dim, dropout=dropout)
             for _ in range(2)
         ])
-        self.human_cond_proj = nn.Sequential(
+        self.human_token_proj = nn.Sequential(
             nn.LayerNorm(latent_dim),
             nn.Linear(latent_dim, latent_dim),
             nn.SiLU(),
             nn.Linear(latent_dim, latent_dim),
         )
-        self.cross_attn = CrossAttention(latent_dim, num_heads=num_heads, dropout=dropout) if self.robot_cond_joint_num > 0 else None
-        self.cross_norm_q = nn.LayerNorm(latent_dim) if self.robot_cond_joint_num > 0 else None
-        self.cross_norm_kv = nn.LayerNorm(latent_dim) if self.robot_cond_joint_num > 0 else None
-        self.interaction_cond_proj = nn.Sequential(
+        self.spatial_cross_attn = CrossAttention(latent_dim, num_heads=num_heads, dropout=dropout) if self.robot_cond_joint_num > 0 else None
+        self.spatial_norm_q = nn.LayerNorm(latent_dim) if self.robot_cond_joint_num > 0 else None
+        self.spatial_norm_kv = nn.LayerNorm(latent_dim) if self.robot_cond_joint_num > 0 else None
+        self.temporal_cross_attn = CrossAttention(latent_dim, num_heads=num_heads, dropout=dropout) if self.robot_cond_joint_num > 0 else None
+        self.temporal_norm_q = nn.LayerNorm(latent_dim) if self.robot_cond_joint_num > 0 else None
+        self.temporal_norm_kv = nn.LayerNorm(latent_dim) if self.robot_cond_joint_num > 0 else None
+        self.interaction_token_proj = nn.Sequential(
+            nn.LayerNorm(latent_dim),
+            nn.Linear(latent_dim, latent_dim),
+            nn.SiLU(),
+            nn.Linear(latent_dim, latent_dim),
+        )
+        self.human_global_pool = TokenAttentionPool(latent_dim)
+        self.interaction_global_pool = TokenAttentionPool(latent_dim)
+        self.human_global_proj = nn.Sequential(
+            nn.LayerNorm(latent_dim),
+            nn.Linear(latent_dim, latent_dim),
+            nn.SiLU(),
+            nn.Linear(latent_dim, latent_dim),
+        )
+        self.interaction_global_proj = nn.Sequential(
             nn.LayerNorm(latent_dim),
             nn.Linear(latent_dim, latent_dim),
             nn.SiLU(),
@@ -243,38 +287,51 @@ class MotionTransformerTwoStage(nn.Module):
 
         self.pos_embed = nn.Parameter(torch.zeros(1, num_frames, latent_dim), requires_grad=False)
         self.cond_time_pos_embed = nn.Parameter(torch.zeros(1, num_frames, latent_dim), requires_grad=False)
+        self.motion_joint_pos_embed = nn.Parameter(torch.zeros(1, 1, self.input_joint_num, latent_dim))
+        self.human_joint_pos_embed = nn.Parameter(torch.zeros(1, 1, self.human_cond_joint_num, latent_dim))
+        self.robot_joint_pos_embed = nn.Parameter(torch.zeros(1, 1, self.robot_cond_joint_num, latent_dim)) if self.robot_cond_joint_num > 0 else None
+
         self.blocks = nn.ModuleList([
-            DiTBlock(latent_dim, num_heads, mlp_ratio=ff_size / latent_dim, dropout=dropout)
+            SpatialTemporalDiTBlock(latent_dim, num_heads, mlp_ratio=ff_size / latent_dim, dropout=dropout)
             for _ in range(num_layers)
         ])
-        self.final_layer = FinalLayer(latent_dim, self.input_feats)
+        self.final_layer = FinalLayerJoint(latent_dim)
 
         self.initialize_weights()
 
     def initialize_weights(self):
-        nn.init.xavier_uniform_(self.x_embedder.weight)
-        nn.init.zeros_(self.x_embedder.bias)
-
         pos_embed = get_1d_sincos_pos_embed(self.num_frames, self.latent_dim)
         self.pos_embed.data.copy_(pos_embed)
         self.cond_time_pos_embed.data.copy_(pos_embed)
+
+        nn.init.normal_(self.motion_joint_pos_embed, std=0.02)
+        nn.init.normal_(self.human_joint_pos_embed, std=0.02)
+        if self.robot_joint_pos_embed is not None:
+            nn.init.normal_(self.robot_joint_pos_embed, std=0.02)
+
+        nn.init.xavier_uniform_(self.motion_joint_embed.weight)
+        nn.init.zeros_(self.motion_joint_embed.bias)
+        nn.init.xavier_uniform_(self.human_joint_embed.weight)
+        nn.init.zeros_(self.human_joint_embed.bias)
+        if self.robot_joint_embed is not None:
+            nn.init.xavier_uniform_(self.robot_joint_embed.weight)
+            nn.init.zeros_(self.robot_joint_embed.bias)
 
         nn.init.normal_(self.t_embedder[0].weight, std=0.02)
         nn.init.zeros_(self.t_embedder[0].bias)
         nn.init.normal_(self.t_embedder[2].weight, std=0.02)
         nn.init.zeros_(self.t_embedder[2].bias)
 
-        for proj in (self.human_cond_proj, self.interaction_cond_proj):
+        for proj in (
+            self.human_token_proj,
+            self.interaction_token_proj,
+            self.human_global_proj,
+            self.interaction_global_proj,
+        ):
             nn.init.normal_(proj[1].weight, std=0.02)
             nn.init.zeros_(proj[1].bias)
             nn.init.normal_(proj[3].weight, std=0.02)
             nn.init.zeros_(proj[3].bias)
-
-        nn.init.xavier_uniform_(self.human_joint_embed.weight)
-        nn.init.zeros_(self.human_joint_embed.bias)
-        if self.robot_joint_embed is not None:
-            nn.init.xavier_uniform_(self.robot_joint_embed.weight)
-            nn.init.zeros_(self.robot_joint_embed.bias)
 
         for block in self.blocks:
             nn.init.zeros_(block.adaLN_modulation[1].weight)
@@ -296,44 +353,66 @@ class MotionTransformerTwoStage(nn.Module):
             human_tokens = gcn(human_tokens)
         human_tokens = human_tokens.reshape(bsz, seq_len, self.human_cond_joint_num, self.latent_dim)
         time_pe = self.cond_time_pos_embed[:, :seq_len].unsqueeze(2)
-        human_tokens = human_tokens + time_pe
-        human_time_tokens = human_tokens.mean(dim=2)
-        human_global = self.human_cond_proj(human_time_tokens.mean(dim=1))
-        return human_tokens, human_time_tokens, human_global
+        human_tokens = human_tokens + time_pe + self.human_joint_pos_embed
+        stage1_tokens = self.human_token_proj(human_tokens)
+        human_global = self.human_global_proj(self.human_global_pool(stage1_tokens.reshape(bsz, seq_len * self.human_cond_joint_num, self.latent_dim)))
+        return human_tokens, stage1_tokens, human_global
 
     def encode_interaction_condition(self, mod, human_tokens):
-        if self.robot_cond_joint_num == 0:
-            human_time_tokens = human_tokens.mean(dim=2)
-            interaction_global = self.interaction_cond_proj(human_time_tokens.mean(dim=1))
-            return human_time_tokens, interaction_global
-
         bsz, seq_len, _ = mod.shape
+        if self.robot_cond_joint_num == 0:
+            zero_tokens = torch.zeros_like(human_tokens)
+            zero_global = self.interaction_global_proj(self.interaction_global_pool(zero_tokens.reshape(bsz, seq_len * self.human_cond_joint_num, self.latent_dim)))
+            return zero_tokens, zero_global
+
         human_dim = self.human_cond_joint_num * 3
         time_pe = self.cond_time_pos_embed[:, :seq_len].unsqueeze(2)
         robot_motion = mod[:, :, human_dim:].reshape(bsz, seq_len, self.robot_cond_joint_num, 3)
-        robot_tokens = self.robot_joint_embed(robot_motion) + time_pe
-        robot_tokens = robot_tokens.reshape(bsz, seq_len * self.robot_cond_joint_num, self.latent_dim)
+        robot_tokens = self.robot_joint_embed(robot_motion) + time_pe + self.robot_joint_pos_embed
 
-        human_query = human_tokens.reshape(bsz, seq_len * self.human_cond_joint_num, self.latent_dim)
-        human_query = human_query + self.cross_attn(
-            self.cross_norm_q(human_query),
-            self.cross_norm_kv(robot_tokens)
+        human_spatial_query = human_tokens.reshape(bsz * seq_len, self.human_cond_joint_num, self.latent_dim)
+        robot_spatial_context = robot_tokens.reshape(bsz * seq_len, self.robot_cond_joint_num, self.latent_dim)
+        spatial_interaction = self.spatial_cross_attn(
+            self.spatial_norm_q(human_spatial_query),
+            self.spatial_norm_kv(robot_spatial_context)
         )
-        human_query = human_query.reshape(bsz, seq_len, self.human_cond_joint_num, self.latent_dim)
-        interaction_time_tokens = human_query.mean(dim=2)
-        interaction_global = self.interaction_cond_proj(interaction_time_tokens.mean(dim=1))
-        return interaction_time_tokens, interaction_global
+        spatial_interaction = spatial_interaction.reshape(bsz, seq_len, self.human_cond_joint_num, self.latent_dim)
+
+        human_temporal_query = spatial_interaction.transpose(1, 2).reshape(
+            bsz * self.human_cond_joint_num, seq_len, self.latent_dim
+        )
+        robot_temporal_context = robot_tokens.mean(dim=2, keepdim=True).expand(-1, -1, self.human_cond_joint_num, -1)
+        robot_temporal_context = robot_temporal_context.transpose(1, 2).reshape(
+            bsz * self.human_cond_joint_num, seq_len, self.latent_dim
+        )
+        temporal_interaction = self.temporal_cross_attn(
+            self.temporal_norm_q(human_temporal_query),
+            self.temporal_norm_kv(robot_temporal_context)
+        )
+        temporal_interaction = temporal_interaction.reshape(
+            bsz, self.human_cond_joint_num, seq_len, self.latent_dim
+        ).transpose(1, 2)
+
+        stage2_tokens = self.interaction_token_proj(temporal_interaction)
+        interaction_global = self.interaction_global_proj(
+            self.interaction_global_pool(stage2_tokens.reshape(bsz, seq_len * self.human_cond_joint_num, self.latent_dim))
+        )
+        return stage2_tokens, interaction_global
 
     def forward(self, x, timesteps, mod=None):
-        bsz, seq_len, _ = x.shape
+        bsz, seq_len, feat_dim = x.shape
         if seq_len > self.num_frames:
             raise ValueError(f"Sequence length {seq_len} exceeds configured num_frames {self.num_frames}")
+        if feat_dim != self.input_feats:
+            raise ValueError(f"Input feature mismatch: x D={feat_dim} vs expected input_feats={self.input_feats}.")
 
-        x = self.x_embedder(x) + self.pos_embed[:, :seq_len]
+        x = x.reshape(bsz, seq_len, self.input_joint_num, 3)
+        x = self.motion_joint_embed(x)
+        x = x + self.pos_embed[:, :seq_len].unsqueeze(2) + self.motion_joint_pos_embed
         c_base = self.t_embedder(timestep_embedding(timesteps, self.latent_dim))
 
-        stage1_time_tokens = None
-        stage2_time_tokens = None
+        stage1_tokens = None
+        stage2_tokens = None
         c_stage1 = c_base
         c_stage2 = c_base
 
@@ -348,16 +427,17 @@ class MotionTransformerTwoStage(nn.Module):
                 raise ValueError(
                     f"Condition feature mismatch: mod D={mod.shape[2]} vs expected cond_feats={self.cond_feats}."
                 )
-            human_tokens, stage1_time_tokens, human_global = self.encode_human_condition(mod)
-            stage2_time_tokens, interaction_global = self.encode_interaction_condition(mod, human_tokens)
+            human_tokens, stage1_tokens, human_global = self.encode_human_condition(mod)
+            stage2_tokens, interaction_global = self.encode_interaction_condition(mod, human_tokens)
             c_stage1 = c_base + human_global
             c_stage2 = c_base + interaction_global
-            x = x + stage1_time_tokens[:, :seq_len]
+            x = x + stage1_tokens[:, :seq_len]
 
         for i, block in enumerate(self.blocks):
-            if i == self.stage1_num_layers and stage2_time_tokens is not None:
-                x = x + stage2_time_tokens[:, :seq_len]
+            if i == self.stage1_num_layers and stage2_tokens is not None:
+                x = x + stage2_tokens[:, :seq_len]
             cond = c_stage1 if i < self.stage1_num_layers else c_stage2
             x = block(x, cond)
 
-        return self.final_layer(x, c_stage2)
+        x = self.final_layer(x, c_stage2)
+        return x.reshape(bsz, seq_len, self.input_feats)

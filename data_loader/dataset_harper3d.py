@@ -19,7 +19,8 @@ class DatasetHarper3D(Dataset):
     """
 
     def __init__(self, mode, t_his=25, t_pred=100, actions='all', use_vel=False,
-                 data_path='./data/harper3d', include_spot=True, fps='30hz'):
+                 data_path='./data/harper3d', include_spot=True, fps='30hz',
+                 use_data_aug=False, aug_rotate_prob=0.5, aug_reverse_prob=0.3):
         """
         Args:
             mode: 'train' or 'test'
@@ -36,6 +37,9 @@ class DatasetHarper3D(Dataset):
         self.include_spot = include_spot
         self.actions_filter = actions
         self.fps = fps
+        self.use_data_aug = use_data_aug and mode == 'train'
+        self.aug_rotate_prob = aug_rotate_prob
+        self.aug_reverse_prob = aug_reverse_prob
         
         super().__init__(mode, t_his, t_pred, actions)
         
@@ -167,6 +171,43 @@ class DatasetHarper3D(Dataset):
                 counter += 1
             
             self.data[subject][action_key] = seq
+
+    def _apply_scene_rotation(self, sample):
+        """Rotate the whole scene around the vertical z-axis."""
+        theta = np.random.uniform(0, 2 * np.pi)
+        rot = np.array([
+            [np.cos(theta), -np.sin(theta), 0.0],
+            [np.sin(theta),  np.cos(theta), 0.0],
+            [0.0,            0.0,           1.0],
+        ], dtype=sample.dtype)
+        return np.matmul(sample, rot.T)
+
+    def _apply_sequence_reverse(self, sample):
+        """
+        Reverse the temporal order and swap history/future semantics.
+
+        Following the paper's idea, after reversal we keep the last t_his frames
+        of the original sequence as the observation by taking the reversed clip.
+        """
+        return sample[:, ::-1].copy()
+
+    def augment_sample(self, sample):
+        if np.random.uniform() < self.aug_rotate_prob:
+            sample = self._apply_scene_rotation(sample)
+        if np.random.uniform() < self.aug_reverse_prob:
+            sample = self._apply_sequence_reverse(sample)
+        return sample
+
+    def sampling_generator(self, num_samples=1000, batch_size=8, aug=True):
+        for _ in range(num_samples // batch_size):
+            sample = []
+            for _ in range(batch_size):
+                sample_i = self.sample()
+                sample.append(sample_i)
+            sample = np.concatenate(sample, axis=0)
+            if aug and self.use_data_aug:
+                sample = self.augment_sample(sample)
+            yield sample
 
     def get_sample_with_action(self, action_name):
         """Sample a sequence from a specific action."""
