@@ -33,7 +33,11 @@ def update_config(cfg, args_dict):
     cfg.result_dir = '%s/results' % cfg.cfg_dir
     cfg.log_dir = '%s/log' % cfg.cfg_dir
     cfg.tb_dir = '%s/tb' % cfg.cfg_dir
-    cfg.gif_dir = '%s/out' % cfg.cfg_dir
+    # Keep visualization outputs in a fixed project folder for easier browsing.
+    if args_dict['mode'] == 'pred':
+        cfg.gif_dir = os.path.join(os.getcwd(), 'images')
+    else:
+        cfg.gif_dir = '%s/out' % cfg.cfg_dir
     os.makedirs(cfg.model_dir, exist_ok=True)
     os.makedirs(cfg.result_dir, exist_ok=True)
     os.makedirs(cfg.log_dir, exist_ok=True)

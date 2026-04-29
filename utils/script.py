@@ -7,7 +7,6 @@ from utils import padding_traj, split_motion_inputs, get_position_inputs
 from utils.visualization import render_animation
 from models.default import MotionTransformer
 from models.condition_two_stage import MotionTransformerTwoStage
-from models.transfusion import MotionTransformer as TransfusionMotionTransformer
 from models.diffusion import Diffusion
 from data_loader.dataset_h36m import DatasetH36M
 from data_loader.dataset_humaneva import DatasetHumanEva
@@ -25,14 +24,12 @@ def create_model_and_diffusion(cfg):
     model_variant = getattr(cfg, 'model_variant', 'default')
     if model_variant == 'two_stage' and cfg.stage1_num_layers != 0:
         model_cls = MotionTransformerTwoStage
-    elif model_variant == 'transfusion':
-        model_cls = TransfusionMotionTransformer
     elif model_variant in ('default', 'two_stage'):
         model_cls = MotionTransformer
     else:
         raise ValueError(
             f"Unknown model_variant '{model_variant}'. "
-            "Supported values are: 'default', 'two_stage', 'transfusion'."
+            "Supported values are: 'default', 'two_stage'."
         )
     model = model_cls(
         input_feats=3 * cfg.joint_num,  # 3 means x, y, z
