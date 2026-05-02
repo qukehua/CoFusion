@@ -46,6 +46,13 @@ if __name__ == '__main__':
     parser.add_argument('--ema', type=bool, default=True)
     parser.add_argument('--vis_col', type=int, default=10)
     parser.add_argument('--vis_row', type=int, default=3)
+    parser.add_argument(
+        '--gif_dir',
+        type=str,
+        default=None,
+        help='pred mode only: directory for pred_*.gif (default: ./images or cfg gif_dir). '
+        'Use a separate folder to avoid overwriting existing GIFs.',
+    )
     # wandb arguments
     parser.add_argument('--use_wandb', action='store_true', help='Enable wandb logging')
     parser.add_argument('--wandb_project', type=str, default='TransFusion', help='wandb project name')

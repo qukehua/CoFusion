@@ -15,7 +15,10 @@ def _select_visual_samples(traj_est, cfg):
     if traj_est.shape[0] <= n_show:
         return traj_est
 
+    # Harper3D: keep legacy visualization (random picks); CHICO can use median-of-K from yaml.
     strategy = str(getattr(cfg, 'vis_sample_strategy', 'random')).lower()
+    if getattr(cfg, 'dataset', None) == 'harper3d':
+        strategy = 'random'
     if strategy == 'random':
         idx = np.random.choice(traj_est.shape[0], size=n_show, replace=False)
         return traj_est[idx]
@@ -32,12 +35,14 @@ def _select_visual_samples(traj_est, cfg):
 
 def _attach_robot_joints_for_vis(pred_human, gt_full, cfg):
     """
-    For human-only prediction, append GT robot / Spot joints so rendered pred
-    panels use the same full skeleton (human + robot) as context/gt.
+    For human-only prediction, append GT robot / Spot joints so pred panels draw the
+    full scene (human forecast + known robot) like context/gt.
     """
     if not getattr(cfg, 'predict_human_only', False):
         return pred_human
     if gt_full.shape[1] <= cfg.output_total_joints:
+        return pred_human
+    if getattr(cfg, 'vis_skip_attach_robot', False):
         return pred_human
 
     ds = getattr(cfg, 'dataset', None)

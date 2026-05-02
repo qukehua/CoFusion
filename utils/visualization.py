@@ -14,7 +14,8 @@ def render_animation(skeleton, poses_generator, algos, t_hist, fix_0=True, azim=
                      elev=15.0, axis_radius=1.5, output=None, mode='pred',
                      size=2, ncol=5, bitrate=3000, dpi=80, coord_order=(0, 1, 2),
                      auto_axis=True, axis_padding=0.2, line_width=2.0,
-                     title_fontsize=18, axis_bbox_num_joints=None):
+                     title_fontsize=18, axis_bbox_num_joints=None,
+                     use_legacy_visualization=False):
     """
     TODO
     Render an animation. The supported output modes are:
@@ -23,6 +24,11 @@ def render_animation(skeleton, poses_generator, algos, t_hist, fix_0=True, azim=
      -- 'html': render the animation as HTML5 video. Can be displayed in a notebook using HTML(...).
      -- 'filename.mp4': render and export the animation as an h264 video (requires ffmpeg).
      -- 'filename.gif': render and export the animation a gif file (requires imagemagick).
+
+    use_legacy_visualization:
+      True  -> Harper3D/original: global axis_params per panel, double continue (n==0 and n%ncol==0),
+               fixed axis limits from compute_axis_params (full sequence).
+      False -> CHICO-tuned: optional axis_bbox_num_joints, per-frame axis limits, freeze only n==0 context.
     """
     all_poses = next(poses_generator)
     algo = algos[0] if len(algos) > 0 else next(iter(all_poses.keys()))
@@ -54,12 +60,7 @@ def render_animation(skeleton, poses_generator, algos, t_hist, fix_0=True, azim=
         return params
 
     def axis_params_one_frame(single_frame_joints):
-        """Bounding sphere from one skeleton pose (avoids tiny figures when global bbox is huge).
-
-        If axis_bbox_num_joints is set, only those joints (e.g. human body) set the limits—
-        optional GT robot/Spot joints appended for drawing must not expand the box (CHICO KUKA
-        reaches far above the human and caused tiny human figures).
-        """
+        """Per-frame bbox (CHICO); optional clip to first K joints for human-only axis scale."""
         jnts = single_frame_joints
         if axis_bbox_num_joints is not None:
             jnts = single_frame_joints[:axis_bbox_num_joints]
@@ -79,7 +80,10 @@ def render_animation(skeleton, poses_generator, algos, t_hist, fix_0=True, azim=
         ax = fig.add_subplot(nrow, ncol, index+1, projection='3d')
         ax.view_init(elev=elev, azim=azim)
         if auto_axis:
-            center, radius = axis_params_one_frame(projected_poses[index][0])
+            if use_legacy_visualization:
+                center, radius = axis_params[index]
+            else:
+                center, radius = axis_params_one_frame(projected_poses[index][0])
             ax.set_xlim3d([center[0] - radius, center[0] + radius])
             ax.set_ylim3d([center[1] - radius, center[1] + radius])
             ax.set_zlim3d([center[2] - radius, center[2] + radius])
@@ -131,20 +135,36 @@ def render_animation(skeleton, poses_generator, algos, t_hist, fix_0=True, azim=
             lcol, mcol, rcol = pred_lcol, pred_mcol, pred_rcol
 
         for n, ax in enumerate(ax_3d):
-            # Freeze only the first subplot ('context') during prediction playback.
-            frame_for_axis = i
-            if fix_0 and n == 0 and i >= t_hist:
-                frame_for_axis = t_hist - 1
-            trajectories[n] = projected_poses[n][:, 0]
-            if auto_axis:
-                center, radius = axis_params_one_frame(projected_poses[n][frame_for_axis])
-                ax.set_xlim3d([center[0] - radius, center[0] + radius])
-                ax.set_ylim3d([center[1] - radius, center[1] + radius])
-                ax.set_zlim3d([center[2] - radius, center[2] + radius])
+            if use_legacy_visualization:
+                # Original Harper/studio logic: two independent skips (see legacy repo).
+                if fix_0 and n == 0 and i >= t_hist:
+                    continue
+                if fix_0 and n % ncol == 0 and i >= t_hist:
+                    continue
+                trajectories[n] = projected_poses[n][:, 0]
+                if auto_axis:
+                    center, radius = axis_params[n]
+                    ax.set_xlim3d([center[0] - radius, center[0] + radius])
+                    ax.set_ylim3d([center[1] - radius, center[1] + radius])
+                    ax.set_zlim3d([center[2] - radius, center[2] + radius])
+                else:
+                    ax.set_xlim3d([-axis_radius + trajectories[n][i, 0], axis_radius + trajectories[n][i, 0]])
+                    ax.set_ylim3d([-axis_radius + trajectories[n][i, 1], axis_radius + trajectories[n][i, 1]])
+                    ax.set_zlim3d([-axis_radius + trajectories[n][i, 2], axis_radius + trajectories[n][i, 2]])
             else:
-                ax.set_xlim3d([-axis_radius + trajectories[n][i, 0], axis_radius + trajectories[n][i, 0]])
-                ax.set_ylim3d([-axis_radius + trajectories[n][i, 1], axis_radius + trajectories[n][i, 1]])
-                ax.set_zlim3d([-axis_radius + trajectories[n][i, 2], axis_radius + trajectories[n][i, 2]])
+                frame_for_axis = i
+                if fix_0 and n == 0 and i >= t_hist:
+                    frame_for_axis = t_hist - 1
+                trajectories[n] = projected_poses[n][:, 0]
+                if auto_axis:
+                    center, radius = axis_params_one_frame(projected_poses[n][frame_for_axis])
+                    ax.set_xlim3d([center[0] - radius, center[0] + radius])
+                    ax.set_ylim3d([center[1] - radius, center[1] + radius])
+                    ax.set_zlim3d([center[2] - radius, center[2] + radius])
+                else:
+                    ax.set_xlim3d([-axis_radius + trajectories[n][i, 0], axis_radius + trajectories[n][i, 0]])
+                    ax.set_ylim3d([-axis_radius + trajectories[n][i, 1], axis_radius + trajectories[n][i, 1]])
+                    ax.set_zlim3d([-axis_radius + trajectories[n][i, 2], axis_radius + trajectories[n][i, 2]])
 
         if not initialized:
 
@@ -165,8 +185,14 @@ def render_animation(skeleton, poses_generator, algos, t_hist, fix_0=True, azim=
         else:
 
             for n, ax in enumerate(ax_3d):
-                if fix_0 and n == 0 and i >= t_hist:
-                    continue
+                if use_legacy_visualization:
+                    if fix_0 and n == 0 and i >= t_hist:
+                        continue
+                    if fix_0 and n % ncol == 0 and i >= t_hist:
+                        continue
+                else:
+                    if fix_0 and n == 0 and i >= t_hist:
+                        continue
 
                 pos = projected_poses[n][i]
                 for bone_idx, (j, j_parent) in enumerate(bone_pairs_per_pose[n]):

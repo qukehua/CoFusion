@@ -35,7 +35,13 @@ def update_config(cfg, args_dict):
     cfg.tb_dir = '%s/tb' % cfg.cfg_dir
     # Keep visualization outputs in a fixed project folder for easier browsing.
     if args_dict['mode'] == 'pred':
-        cfg.gif_dir = os.path.join(os.getcwd(), 'images')
+        cli_gif = args_dict.get('gif_dir')
+        if cli_gif:
+            cfg.gif_dir = os.path.abspath(cli_gif)
+        elif getattr(cfg, 'gif_dir', None):
+            cfg.gif_dir = os.path.abspath(cfg.gif_dir)
+        else:
+            cfg.gif_dir = os.path.join(os.getcwd(), 'images')
     else:
         cfg.gif_dir = '%s/out' % cfg.cfg_dir
     os.makedirs(cfg.model_dir, exist_ok=True)
@@ -93,8 +99,12 @@ class Config:
         self.vis_title_fontsize = cfg.get('vis_title_fontsize', 18)
         self.vis_sample_strategy = cfg.get('vis_sample_strategy', 'random')
         self.vis_candidate_k = cfg.get('vis_candidate_k', 10)
+        self.vis_skip_attach_robot = cfg.get('vis_skip_attach_robot', False)
         self.use_velocity_input = cfg.get('use_velocity_input', False)
         self.velocity_loss_weight = cfg.get('velocity_loss_weight', 0.0)
+
+        # pred mode: optional default GIF output dir (CLI --gif_dir overrides)
+        self.gif_dir = cfg.get('gif_dir')
 
         self.n_pre = cfg['n_pre']
         self.multimodal_path = cfg.get('multimodal_path', None)
