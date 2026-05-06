@@ -14,6 +14,10 @@ from data_loader.dataset_chico import DatasetCHICO
 from data_loader.dataset_chico_multimodal import DatasetCHICO_multi
 from data_loader.dataset_comad import DatasetCoMad
 from data_loader.dataset_comad_multimodal import DatasetCoMad_multi
+from data_loader.dataset_3dpw import Dataset3DPW
+from data_loader.dataset_3dpw_multimodal import Dataset3DPW_multi
+from data_loader.dataset_cmu_mocap import DatasetCMUMocap
+from data_loader.dataset_cmu_mocap_multimodal import DatasetCMUMocap_multi
 from scipy.spatial.distance import pdist, squareform
 
 
@@ -72,8 +76,14 @@ def dataset_split(cfg):
     elif cfg.dataset == 'comad':
         dataset_cls = DatasetCoMad
         dataset_cls_multi = DatasetCoMad_multi
+    elif cfg.dataset == '3dpw':
+        dataset_cls = Dataset3DPW
+        dataset_cls_multi = Dataset3DPW_multi
+    elif cfg.dataset == 'cmu_mocap':
+        dataset_cls = DatasetCMUMocap
+        dataset_cls_multi = DatasetCMUMocap_multi
     else:
-        raise ValueError(f"Unsupported dataset '{cfg.dataset}'. Supported: 'harper3d', 'chico', 'comad'.")
+        raise ValueError(f"Unsupported dataset '{cfg.dataset}'. Supported: 'harper3d', 'chico', 'comad', '3dpw', 'cmu_mocap'.")
 
     if cfg.dataset == 'harper3d':
         dataset = dataset_cls('train', cfg.t_his, cfg.t_pred, actions='all',
@@ -143,6 +153,76 @@ def dataset_split(cfg):
                                                multimodal_path=cfg.multimodal_path,
                                                data_candi_path=cfg.data_candi_path,
                                                eval_interaction_filter=comad_test_if)
+    elif cfg.dataset == '3dpw':
+        train_scene = getattr(cfg, 'scene_filter_train', None)
+        test_scene = getattr(cfg, 'scene_filter_test', None)
+        dataset = dataset_cls(
+            'train',
+            cfg.t_his,
+            cfg.t_pred,
+            actions='all',
+            data_path=cfg.data_path,
+            scene_filter=train_scene,
+            require_two_person=getattr(cfg, 'require_two_person', True),
+            use_data_aug=cfg.use_data_aug,
+            aug_rotate_prob=cfg.aug_rotate_prob,
+            aug_reverse_prob=cfg.aug_reverse_prob,
+        )
+        dataset_test = dataset_cls(
+            'test',
+            cfg.t_his,
+            cfg.t_pred,
+            actions='all',
+            data_path=cfg.data_path,
+            scene_filter=test_scene,
+            require_two_person=getattr(cfg, 'require_two_person', True),
+            use_data_aug=False,
+        )
+        dataset_multi_test = dataset_cls_multi(
+            'test',
+            cfg.t_his,
+            cfg.t_pred,
+            data_path=cfg.data_path,
+            scene_filter=test_scene,
+            require_two_person=getattr(cfg, 'require_two_person', True),
+            multimodal_path=cfg.multimodal_path,
+            data_candi_path=cfg.data_candi_path,
+        )
+    elif cfg.dataset == 'cmu_mocap':
+        cmu_scene = getattr(cfg, 'cmu_scene_filter', None)
+        cmu_file = getattr(cfg, 'cmu_file_filter', None)
+        dataset = dataset_cls(
+            'train',
+            cfg.t_his,
+            cfg.t_pred,
+            actions='all',
+            data_path=cfg.data_path,
+            scene_filter=cmu_scene,
+            file_filter=cmu_file,
+            use_data_aug=cfg.use_data_aug,
+            aug_rotate_prob=cfg.aug_rotate_prob,
+            aug_reverse_prob=cfg.aug_reverse_prob,
+        )
+        dataset_test = dataset_cls(
+            'test',
+            cfg.t_his,
+            cfg.t_pred,
+            actions='all',
+            data_path=cfg.data_path,
+            scene_filter=cmu_scene,
+            file_filter=cmu_file,
+            use_data_aug=False,
+        )
+        dataset_multi_test = dataset_cls_multi(
+            'test',
+            cfg.t_his,
+            cfg.t_pred,
+            data_path=cfg.data_path,
+            scene_filter=cmu_scene,
+            file_filter=cmu_file,
+            multimodal_path=cfg.multimodal_path,
+            data_candi_path=cfg.data_candi_path,
+        )
     return {'train': dataset, 'test': dataset_test}, dataset_multi_test
 
 

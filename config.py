@@ -169,6 +169,11 @@ class Config:
         self.use_hh_human_condition = cfg.get('use_hh_human_condition', self.include_person2)
         self.fps = cfg.get('fps', '30hz')
         self.harper3d_multimodal_dir = cfg.get('harper3d_multimodal_dir', '/data3/user/qkh/DATASET/TransFusion/HARPER')
+        self.scene_filter_train = cfg.get('scene_filter_train', None)
+        self.scene_filter_test = cfg.get('scene_filter_test', None)
+        self.require_two_person = cfg.get('require_two_person', True)
+        self.cmu_scene_filter = cfg.get('cmu_scene_filter', None)
+        self.cmu_file_filter = cfg.get('cmu_file_filter', None)
 
         # indirect variable
         if self.dataset != "comad":
@@ -212,8 +217,24 @@ class Config:
             self.cond_joint_num = self.total_joint_num - 1 if use_scene_condition else self.joint_num
             # Test / val / pred / multimodal eval: restrict to path segment HH or HR (train always loads all).
             self.comad_test_interactions = parse_comad_test_interactions(cfg.get("comad_test_interactions", "all"))
+            # Pred GIF: apply InteRACT comad_hr.py Motive coordinate fix (-x, z, y). HR scenes match paper;
+            # set false if HH-only viz looks better in raw Motive axes.
+            self.comad_motive_to_interact_axes = cfg.get("comad_motive_to_interact_axes", False)
+        elif self.dataset == '3dpw':
+            # 3DPW: two persons, each 24 SMPL joints (total 48).
+            self.total_joint_num = 48
+            self.output_total_joints = self.total_joint_num
+            self.joint_num = self.output_total_joints - 1
+            self.cond_joint_num = self.joint_num
+        elif self.dataset == 'cmu_mocap':
+            # CMU loader synthesizes Person_2 from Person_1; default single person has 39 joints.
+            # We keep this configurable in case txt layout differs.
+            self.total_joint_num = cfg.get('cmu_total_joint_num', 78)
+            self.output_total_joints = self.total_joint_num
+            self.joint_num = self.output_total_joints - 1
+            self.cond_joint_num = self.joint_num
         else:
             raise ValueError(
-                f"Unsupported dataset '{self.dataset}'. Supported datasets are 'harper3d', 'chico', and 'comad'."
+                f"Unsupported dataset '{self.dataset}'. Supported datasets are 'harper3d', 'chico', 'comad', '3dpw', and 'cmu_mocap'."
             )
         self.idx_pad, self.zero_index = generate_pad(self.padding, self.t_his, self.t_pred)

@@ -1,6 +1,7 @@
 from torch import tensor
 from utils import *
 from utils.script import sample_preprocessing
+from data_loader.comad_kinematics import comad_fix_orientation_motive_to_interact
 
 
 def _select_visual_samples(traj_est, cfg):
@@ -81,6 +82,13 @@ def pose_generator(data_set, model_select, diffusion, cfg, mode=None,
             else:
                 raise NotImplementedError(f"unknown pose generator mode: {mode}")
 
+            # InteRACT CoMaD-HR uses Motive->lab frame fix_orientation before training/viz;
+            # apply here for pred GIFs so matplotlib axes match official pipelines.
+            if getattr(cfg, "dataset", None) == "comad" and getattr(
+                cfg, "comad_motive_to_interact_axes", False
+            ):
+                data = comad_fix_orientation_motive_to_interact(data)
+
             # gt
             gt = data[0].copy()
             gt[:, :1, :] = 0
@@ -115,6 +123,10 @@ def pose_generator(data_set, model_select, diffusion, cfg, mode=None,
             traj_est = traj_est.cpu().numpy()
             traj_est = post_process(traj_est, cfg)
             traj_est = _attach_robot_joints_for_vis(traj_est, gt[0], cfg)
+            if getattr(cfg, "dataset", None) == "comad" and getattr(
+                cfg, "comad_motive_to_interact_axes", False
+            ):
+                traj_est = comad_fix_orientation_motive_to_interact(traj_est)
             traj_est = _select_visual_samples(traj_est, cfg)
 
             if k == 0:

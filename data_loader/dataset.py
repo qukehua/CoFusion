@@ -125,9 +125,26 @@ class Dataset:
             fr_end = fr_start + self.t_total
             traj = seq[fr_start: fr_end]
             return traj[None, ...]
+        elif dataset_type == "comad":
+            # Keys are f"{action}_{interaction}_{seq_id}", e.g. cart_HR_6, handover_HH_43.
+            prefix = f"{action_category}_"
+            candidate = []
+            for _, dict_s_sub in self.data.items():
+                for action_key, seq in dict_s_sub.items():
+                    if action_key.startswith(prefix) and seq.shape[0] > self.t_total:
+                        candidate.append(seq)
+            if len(candidate) == 0:
+                raise ValueError(
+                    f"No CoMad sequence found for task '{action_category}' with length > t_total ({self.t_total})."
+                )
+            seq = candidate[np.random.randint(len(candidate))]
+            fr_start = np.random.randint(seq.shape[0] - self.t_total)
+            fr_end = fr_start + self.t_total
+            traj = seq[fr_start:fr_end]
+            return traj[None, ...]
         else:
             raise ValueError(f"Unsupported dataset_type '{dataset_type}' in sample_iter_action.")
-    
+
     def prepare_iter_action(self, dataset_type):
         if dataset_type == 'harper3d':
             # Collect action names across all subjects; strip duplicate suffixes.
@@ -143,6 +160,21 @@ class Dataset:
                 for action_key in dict_s_sub.keys():
                     base_action = action_key.rsplit('_', 1)[0]
                     action_list.append(base_action)
+            return sorted(list(set(action_list)))
+        elif dataset_type == "comad":
+            # self.data[HH|HR][f"{task}_{HH|HR}_{id}"] — list unique task folder names (cart, handover, ...).
+            action_list = []
+            for _, dict_s_sub in self.data.items():
+                for action_key in dict_s_sub.keys():
+                    task = None
+                    for marker in ("_HH_", "_HR_"):
+                        if marker in action_key:
+                            task = action_key.split(marker, 1)[0]
+                            break
+                    if task is None:
+                        parts = action_key.split("_")
+                        task = parts[0] if parts else action_key
+                    action_list.append(task)
             return sorted(list(set(action_list)))
         else:
             raise ValueError(f"Unsupported dataset_type '{dataset_type}' in prepare_iter_action.")

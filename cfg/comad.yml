@@ -55,6 +55,8 @@ predict_human_only: True
 # Test / val / pred / multimodal eval only (train split unchanged). Paths: test/<action>/<HH|HR>/<id>/...
 # 'all' | 'HR' | 'HH' | 'HR HH' | [HR, HH] — set HR for faster smoke eval on human-robot episodes only.
 comad_test_interactions: HR
+# Pred GIF: InteRACT interact/utils/comad_hr.py Motive fix (-x, z, y). Try false for HH-only quirks.
+comad_motive_to_interact_axes: true
 
 # Scene-wise condition control
 # HR scenes -> use robot joints as condition

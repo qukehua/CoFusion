@@ -4,6 +4,12 @@ from glob import glob
 import numpy as np
 from data_loader.dataset import Dataset
 from data_loader.skeleton import Skeleton
+from data_loader.comad_kinematics import (
+    COMAD_P1_JOINTS_LEFT,
+    COMAD_P1_JOINTS_RIGHT,
+    COMAD_P1_PARENTS,
+    comad_p1_links,
+)
 
 
 def load_json(json_file: str):
@@ -90,13 +96,19 @@ class DatasetCoMad(Dataset):
         self.p2_joints = 25
         self.robot_joints = 12
 
-        # Minimal tree-compatible definitions (chains) for each entity.
-        p1_parents = [-1] + list(range(self.p1_joints - 1))
-        p2_parents = [-1] + list(range(self.p2_joints - 1))
+        # Person_1 / Person_2: anatomical tree per official mapping.json order (not a linear chain).
+        p1_parents = list(COMAD_P1_PARENTS)
+        if len(p1_parents) != self.p1_joints:
+            raise ValueError(f"COMAD_P1_PARENTS length {len(p1_parents)} != p1_joints {self.p1_joints}")
+        p1_links = comad_p1_links()
+        p2_parents = list(COMAD_P1_PARENTS) if self.p2_joints == self.p1_joints else [-1] + list(range(self.p2_joints - 1))
+        p2_links = (
+            comad_p1_links()
+            if self.p2_joints == self.p1_joints
+            else [(j, p) for j, p in enumerate(p2_parents) if p != -1]
+        )
+        # Robot: keep sequential chain (Franka-like); visualization-only topology.
         robot_parents = [-1] + list(range(self.robot_joints - 1))
-
-        p1_links = [(j, p) for j, p in enumerate(p1_parents) if p != -1]
-        p2_links = [(j, p) for j, p in enumerate(p2_parents) if p != -1]
         robot_links = [(j, p) for j, p in enumerate(robot_parents) if p != -1]
 
         all_parents = list(p1_parents)
@@ -118,8 +130,20 @@ class DatasetCoMad(Dataset):
             self.num_robot_joints = self.robot_joints
 
         self.total_joints = len(all_parents)
-        joints_left = [5, 6, 7]
-        joints_right = [2, 3, 4]
+        # Symmetric L/R lists for Skeleton (same length); arm coloring for P1/P2, coarse bands for robot.
+        joints_left = list(COMAD_P1_JOINTS_LEFT)
+        joints_right = list(COMAD_P1_JOINTS_RIGHT)
+        if self.include_person2 and self.num_p2_joints == self.p1_joints:
+            shift = self.p1_joints
+            joints_left.extend(j + shift for j in COMAD_P1_JOINTS_LEFT)
+            joints_right.extend(j + shift for j in COMAD_P1_JOINTS_RIGHT)
+        if self.include_robot and self.num_robot_joints > 0:
+            rb0 = self.p1_joints + self.num_p2_joints
+            half = self.num_robot_joints // 2
+            joints_left.extend(range(rb0, rb0 + half))
+            joints_right.extend(range(rb0 + half, rb0 + self.num_robot_joints))
+        if len(joints_left) != len(joints_right):
+            raise ValueError(f"CoMad L/R joint lists length mismatch: {len(joints_left)} vs {len(joints_right)}")
 
         self.skeleton = Skeleton(
             parents=all_parents,

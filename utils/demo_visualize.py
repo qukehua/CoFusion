@@ -26,7 +26,7 @@ def demo_visualize(mode, cfg, model, diffusion, dataset):
             coord_order = (0, 2, 1) if cfg.dataset == 'harper3d' else (0, 1, 2)
             # CHICO-only: restrict axis bbox to human joints when drawing human+robot (KUKA span).
             axis_bbox_num_joints = None
-            if cfg.dataset == 'chico' and getattr(cfg, 'predict_human_only', False):
+            if getattr(cfg, 'predict_human_only', False) and cfg.dataset in ('chico', 'comad'):
                 axis_bbox_num_joints = cfg.output_total_joints
             # Harper3D: exact legacy render_animation (global axis_params + double continue).
             use_legacy_visualization = cfg.dataset == 'harper3d'
