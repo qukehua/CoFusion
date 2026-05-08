@@ -223,7 +223,7 @@ class Config:
             # set false if HH-only viz looks better in raw Motive axes.
             self.comad_motive_to_interact_axes = cfg.get("comad_motive_to_interact_axes", False)
             # CoMaD visualization can use compact marker sets rather than all 25 markers:
-            # upper_body -> shoulder/elbow/wrist/hand chains, HR -> official HR compact markers.
+            # upper_body -> 11-marker P1 upper body, upper_body_25 -> full-mapping arms.
             self.comad_vis_joint_set = cfg.get("comad_vis_joint_set", "auto")
         elif self.dataset == '3dpw':
             # 3DPW: two persons, each 24 SMPL joints (total 48).
