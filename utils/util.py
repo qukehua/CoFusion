@@ -41,6 +41,8 @@ def padding_traj(traj, padding, idx_pad, zero_index):
 
 def post_process(pred, cfg):
     pred = pred.reshape(pred.shape[0], pred.shape[1], -1, 3)
+    if not getattr(cfg, 'drop_root_joint', True):
+        return pred
     pred = np.concatenate((np.tile(np.zeros((1, cfg.t_his + cfg.t_pred, 1, 3)), (pred.shape[0], 1, 1, 1)), pred),
                           axis=2)
     pred[..., :1, :] = 0
@@ -63,9 +65,10 @@ def get_prediction_traj(traj, cfg):
     return traj
 
 
-def flatten_motion_joints(traj):
-    """Drop the root joint and flatten xyz coordinates."""
-    return traj[..., 1:, :].reshape(*traj.shape[:-2], -1)
+def flatten_motion_joints(traj, drop_root=True):
+    """Flatten xyz coordinates, optionally dropping the root joint."""
+    joints = traj[..., 1:, :] if drop_root else traj
+    return joints.reshape(*joints.shape[:-2], -1)
 
 
 def motion_to_velocity(traj):
@@ -131,7 +134,8 @@ def get_position_inputs(traj, cfg):
                     cond_joints[hh_mask, :, p2_slice, :] = 0
     else:
         cond_joints = target_joints
-    return flatten_motion_joints(target_joints), flatten_motion_joints(cond_joints)
+    drop_root = getattr(cfg, 'drop_root_joint', True)
+    return flatten_motion_joints(target_joints, drop_root), flatten_motion_joints(cond_joints, drop_root)
 
 
 def split_motion_inputs(traj, cfg):

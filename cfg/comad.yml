@@ -12,8 +12,8 @@ num_val_data_sample: 5000
 lr: 3.e-4
 
 n_pre: 20
-multimodal_path: '/data/user/qkh/datasets/CoMad/multimodal/t_his15_comad_p1_p2_robot_thre0.050_t_pred15_thre0.100_filtered.npz'
-data_candi_path: '/data/user/qkh/datasets/CoMad/multimodal/data_candi_comad_p1_p2_robot_t_his15_t_pred15_skiprate20.npz'
+multimodal_path: '/data/user/qkh/datasets/CoMad/multimodal/t_his15_comad_p1-9_robot-2_thre0.050_t_pred15_thre0.100_filtered.npz'
+data_candi_path: '/data/user/qkh/datasets/CoMad/multimodal/data_candi_comad_p1-9_robot-2_t_his15_t_pred15_skiprate20.npz'
 padding: 'LastFrame'
 Complete: True
 noise_steps: 1000
@@ -49,14 +49,29 @@ vis_axis_padding: 0.25
 vis_line_width: 1.5
 vis_title_fontsize: 16
 vis_output_only: True
-comad_vis_joint_set: upper_body
+comad_vis_joint_set: paper
 
 # CoMad specific settings
-include_person2: True
+comad_p1_joints: 9
+comad_p2_joints: 0
+comad_robot_joints: 2
+# Paper human d=27: upper back, shoulders, elbows, wrists, hands.
+# Full 25-marker mapping: BackTop, L/RShoulderBack, L/RElbowOut,
+# L/RWristOut, L/RHandOut.
+comad_p1_joint_indices: [2, 9, 16, 7, 14, 13, 20, 8, 15]
+# Some HR JSONs are already reduced to 11 P1 markers; this fallback follows the
+# official HR loader compact marker order when full 25-marker indices are absent.
+comad_p1_fallback_joint_indices: [0, 1, 2, 3, 4, 5, 6, 9, 10]
+# Paper robot j=6: two end-effector 3-D points corresponding to hand and wrist.
+comad_robot_joint_indices: [10, 11]
+comad_robot_fallback_joint_indices: [8, 9]
+drop_root_joint: False
+include_person2: False
 include_robot: True
 predict_human_only: True
-# Test / val / pred / multimodal eval only (train split unchanged). Paths: test/<action>/<HH|HR>/<id>/...
+# Paths: train|test/<action>/<HH|HR>/<id>/...
 # 'all' | 'HR' | 'HH' | 'HR HH' | [HR, HH] — set HR for faster smoke eval on human-robot episodes only.
+comad_train_interactions: HR
 comad_test_interactions: HR
 # Pred GIF: InteRACT interact/utils/comad_hr.py Motive fix (-x, z, y). Try false for HH-only quirks.
 comad_motive_to_interact_axes: true
@@ -65,6 +80,6 @@ comad_motive_to_interact_axes: true
 # HR scenes -> use robot joints as condition
 use_hr_robot_condition: True
 # HH scenes -> use Person_2 joints as condition
-use_hh_human_condition: True
+use_hh_human_condition: False
 
 data_path: '/data/user/qkh/datasets/CoMad'

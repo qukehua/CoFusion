@@ -54,6 +54,9 @@ COMAD_P1_JOINTS_RIGHT = [14, 15, 16, 17, 18, 19, 20]
 COMAD_HR_VIS_JOINTS = [0, 1, 2, 3, 4, 5, 6, 9, 10]
 COMAD_UPPER_BODY_11_VIS_JOINTS = [0, 1, 2, 3, 4, 5, 6, 9, 10, 7, 8]
 COMAD_UPPER_BODY_25_VIS_JOINTS = [2, 9, 16, 7, 14, 13, 20, 8, 15]
+COMAD_PAPER_HUMAN_JOINT_INDICES = COMAD_UPPER_BODY_25_VIS_JOINTS
+COMAD_PAPER_HUMAN_JOINT_INDICES_11 = COMAD_HR_VIS_JOINTS
+COMAD_PAPER_ROBOT_JOINT_INDICES = [10, 11]
 
 COMAD_HR_VIS_LINKS = [
     (1, 0),  # BackRight - BackLeft
@@ -99,6 +102,8 @@ def comad_p1_links():
 
 def comad_visual_mode(cfg):
     mode = str(getattr(cfg, "comad_vis_joint_set", "auto")).lower()
+    if mode in {"paper", "paper_upper_body", "paper_upperbody"}:
+        return "paper"
     if mode in {"upper_body", "upperbody", "upper_body_11", "upperbody_11", "p1_11"}:
         return "upper_body_11"
     if mode in {"hh", "upper_body_25", "upperbody_25", "arms", "p1_25"}:
@@ -109,11 +114,13 @@ def comad_visual_mode(cfg):
     interactions = getattr(cfg, "comad_test_interactions", None)
     if interactions == {"HH"}:
         return "upper_body_25"
-    return "upper_body_11"
+    return "paper"
 
 
 def comad_visual_joint_indices(cfg):
     mode = comad_visual_mode(cfg)
+    if mode == "paper":
+        return list(range(9))
     if mode == "upper_body_11":
         return COMAD_UPPER_BODY_11_VIS_JOINTS
     if mode == "upper_body_25":
@@ -123,6 +130,14 @@ def comad_visual_joint_indices(cfg):
 
 def comad_visual_skeleton(cfg):
     mode = comad_visual_mode(cfg)
+    if mode == "paper":
+        parents = [-1, 0, 0, 1, 2, 3, 4, 5, 6]
+        return Skeleton(
+            parents=parents,
+            joints_left=[1, 3, 5, 7],
+            joints_right=[2, 4, 6, 8],
+            links=COMAD_HH_VIS_LINKS,
+        )
     if mode == "upper_body_25":
         parents = [-1, 0, 0, 1, 2, 3, 4, 5, 6]
         return Skeleton(

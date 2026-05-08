@@ -209,15 +209,23 @@ class Config:
             self.joint_num = self.output_total_joints - 1
             self.cond_joint_num = self.total_joint_num - 1 if self.use_robot_condition else self.joint_num
         elif self.dataset == 'comad':
-            self.comad_p1_joints = 25
-            self.comad_p2_joints = 25 if self.include_person2 else 0
-            self.comad_robot_joints = 12 if self.include_robot else 0
+            self.drop_root_joint = cfg.get('drop_root_joint', False)
+            self.comad_p1_joints = cfg.get('comad_p1_joints', 9)
+            self.comad_p2_joints = cfg.get('comad_p2_joints', 9) if self.include_person2 else 0
+            self.comad_robot_joints = cfg.get('comad_robot_joints', 2) if self.include_robot else 0
+            self.comad_p1_joint_indices = cfg.get('comad_p1_joint_indices', [2, 9, 16, 7, 14, 13, 20, 8, 15])
+            self.comad_p1_fallback_joint_indices = cfg.get('comad_p1_fallback_joint_indices', [0, 1, 2, 3, 4, 5, 6, 9, 10])
+            self.comad_robot_joint_indices = cfg.get('comad_robot_joint_indices', [10, 11])
+            self.comad_robot_fallback_joint_indices = cfg.get('comad_robot_fallback_joint_indices', [8, 9])
             self.total_joint_num = self.comad_p1_joints + self.comad_p2_joints + self.comad_robot_joints
             self.output_total_joints = self.comad_p1_joints if self.predict_human_only else self.total_joint_num
-            self.joint_num = self.output_total_joints - 1
+            self.joint_num = self.output_total_joints - 1 if self.drop_root_joint else self.output_total_joints
             use_scene_condition = self.use_hr_robot_condition or self.use_hh_human_condition
-            self.cond_joint_num = self.total_joint_num - 1 if use_scene_condition else self.joint_num
-            # Test / val / pred / multimodal eval: restrict to path segment HH or HR (train always loads all).
+            self.cond_joint_num = (
+                self.total_joint_num - 1 if self.drop_root_joint else self.total_joint_num
+            ) if use_scene_condition else self.joint_num
+            # Restrict to path segment HH or HR.
+            self.comad_train_interactions = parse_comad_test_interactions(cfg.get("comad_train_interactions", "HR"))
             self.comad_test_interactions = parse_comad_test_interactions(cfg.get("comad_test_interactions", "all"))
             # Pred GIF: apply InteRACT comad_hr.py Motive coordinate fix (-x, z, y). HR scenes match paper;
             # set false if HH-only viz looks better in raw Motive axes.

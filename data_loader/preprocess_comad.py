@@ -53,7 +53,47 @@ def _fit_joint_dim(arr, n_frames, target_joints):
     return np.concatenate([arr.astype(np.float32), pad], axis=1)
 
 
-def load_comad_sequences(data_path, split="test", include_person2=True, include_robot=True, actions="all"):
+def _parse_joint_indices(joint_indices):
+    if joint_indices is None:
+        return None
+    if isinstance(joint_indices, str):
+        text = joint_indices.strip()
+        if not text or text.lower() in {"none", "auto"}:
+            return None
+        return [int(x) for x in text.replace(",", " ").split()]
+    return [int(x) for x in joint_indices]
+
+
+def _fit_or_select_joint_dim(arr, n_frames, target_joints, joint_indices=None, fallback_indices=None):
+    if arr.ndim != 3 or arr.shape[0] != n_frames or arr.shape[2] != 3:
+        raise ValueError(f"Unexpected entity shape: {arr.shape}")
+    indices = _parse_joint_indices(joint_indices)
+    fallback = _parse_joint_indices(fallback_indices)
+    if indices is not None and len(indices) > 0:
+        if arr.shape[1] > max(indices):
+            return _fit_joint_dim(arr[:, indices], n_frames, target_joints)
+        if fallback is not None and len(fallback) > 0 and arr.shape[1] > max(fallback):
+            return _fit_joint_dim(arr[:, fallback], n_frames, target_joints)
+        if arr.shape[1] == target_joints:
+            return arr.astype(np.float32)
+    return _fit_joint_dim(arr, n_frames, target_joints)
+
+
+def load_comad_sequences(
+    data_path,
+    split="test",
+    include_person2=False,
+    include_robot=True,
+    actions="all",
+    interaction_filter=None,
+    p1_joints=9,
+    p2_joints=0,
+    robot_joints=2,
+    p1_joint_indices=(2, 9, 16, 7, 14, 13, 20, 8, 15),
+    p1_fallback_joint_indices=(0, 1, 2, 3, 4, 5, 6, 9, 10),
+    robot_joint_indices=(10, 11),
+    robot_fallback_joint_indices=(8, 9),
+):
     split_dir = os.path.join(data_path, split)
     json_files = sorted(glob(os.path.join(split_dir, "*", "*", "*", "data.json")))
 
@@ -62,6 +102,8 @@ def load_comad_sequences(data_path, split="test", include_person2=True, include_
     for json_file in tqdm(json_files, desc=f"Loading {split} data"):
         rel = os.path.relpath(json_file, split_dir)
         action, interaction, seq_id, _ = rel.split(os.sep)
+        if interaction_filter is not None and interaction not in interaction_filter:
+            continue
 
         if actions != "all":
             if isinstance(actions, str):
@@ -83,28 +125,32 @@ def load_comad_sequences(data_path, split="test", include_person2=True, include_
         has_person2 = "Person_2" in seq_dict
         has_robot = "Robot" in seq_dict
 
-        # CoMad has mixed schemas in the wild:
-        #   - (Person_1, Person_2, Robot) = (11, 2, 12)
-        #   - (Person_1, Person_2, Robot) = (25, 25, missing)
-        # Normalize to fixed dims so all sequences can be stacked together.
-        p1_target_joints = 25
-        p2_target_joints = 25
-        robot_target_joints = 12
-
         p1 = np.asarray(seq_dict["Person_1"], dtype=np.float32)
         if p1.ndim != 3 or p1.shape[2] != 3:
             print(f"[WARN] Skip file with invalid Person_1 shape {p1.shape}: {json_file}")
             continue
         n_frames = p1.shape[0]
-        p1 = _fit_joint_dim(p1, n_frames, p1_target_joints)
+        p1 = _fit_or_select_joint_dim(
+            p1,
+            n_frames,
+            p1_joints,
+            p1_joint_indices,
+            p1_fallback_joint_indices,
+        )
         entities = [p1]
         if include_person2:
-            p2 = _entity_or_zeros(seq_dict, "Person_2", n_frames, p2_target_joints)
-            p2 = _fit_joint_dim(p2, n_frames, p2_target_joints)
+            p2 = _entity_or_zeros(seq_dict, "Person_2", n_frames, p2_joints)
+            p2 = _fit_joint_dim(p2, n_frames, p2_joints)
             entities.append(p2)
         if include_robot:
-            rb = _entity_or_zeros(seq_dict, "Robot", n_frames, robot_target_joints)
-            rb = _fit_joint_dim(rb, n_frames, robot_target_joints)
+            rb = _entity_or_zeros(seq_dict, "Robot", n_frames, robot_joints)
+            rb = _fit_or_select_joint_dim(
+                rb,
+                n_frames,
+                robot_joints,
+                robot_joint_indices,
+                robot_fallback_joint_indices,
+            )
             entities.append(rb)
         seq = np.concatenate(entities, axis=1)
 
@@ -258,6 +304,19 @@ def main():
     parser.add_argument("--thre_pred", type=float, default=0.1, help="Future difference threshold")
     parser.add_argument("--include_person2", action="store_true", help="Include Person_2 joints")
     parser.add_argument("--include_robot", action="store_true", help="Include Robot joints")
+    parser.add_argument("--p1_joints", type=int, default=9, help="Person_1 joint count")
+    parser.add_argument("--p2_joints", type=int, default=0, help="Person_2 joint count")
+    parser.add_argument("--robot_joints", type=int, default=2, help="Robot joint count")
+    parser.add_argument("--p1_joint_indices", nargs="+", type=int, default=[2, 9, 16, 7, 14, 13, 20, 8, 15])
+    parser.add_argument("--p1_fallback_joint_indices", nargs="+", type=int, default=[0, 1, 2, 3, 4, 5, 6, 9, 10])
+    parser.add_argument("--robot_joint_indices", nargs="+", type=int, default=[10, 11])
+    parser.add_argument("--robot_fallback_joint_indices", nargs="+", type=int, default=[8, 9])
+    parser.add_argument(
+        "--interactions",
+        nargs="+",
+        default=["HR"],
+        help="Interaction folders to include: HR, HH, or all",
+    )
     parser.add_argument("--split", type=str, default="test", choices=["train", "test"], help="Which split to preprocess")
     parser.add_argument("--actions", nargs="+", default=["all"], help="Action filter, e.g., cart react")
     parser.add_argument(
@@ -269,6 +328,7 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
     actions = "all" if args.actions == ["all"] else args.actions
+    interaction_filter = None if args.interactions == ["all"] else {x.upper() for x in args.interactions}
 
     print("=" * 60)
     print("CoMad Preprocessing for TransFusion")
@@ -279,6 +339,8 @@ def main():
     print(f"t_his: {args.t_his}, t_pred: {args.t_pred}, skip_rate: {args.skip_rate}")
     print(f"thre_his: {args.thre_his}, thre_pred: {args.thre_pred}")
     print(f"include_person2: {args.include_person2}, include_robot: {args.include_robot}")
+    print(f"p1_joints: {args.p1_joints}, p2_joints: {args.p2_joints}, robot_joints: {args.robot_joints}")
+    print(f"interactions: {interaction_filter if interaction_filter is not None else 'all'}")
     print(f"group_by_modality: {not args.no_group_by_modality}")
     print(f"actions: {actions}")
     print("=" * 60)
@@ -290,6 +352,14 @@ def main():
         include_person2=args.include_person2,
         include_robot=args.include_robot,
         actions=actions,
+        interaction_filter=interaction_filter,
+        p1_joints=args.p1_joints,
+        p2_joints=args.p2_joints,
+        robot_joints=args.robot_joints,
+        p1_joint_indices=args.p1_joint_indices,
+        p1_fallback_joint_indices=args.p1_fallback_joint_indices,
+        robot_joint_indices=args.robot_joint_indices,
+        robot_fallback_joint_indices=args.robot_fallback_joint_indices,
     )
     print(f"Loaded {len(sequences)} sequences")
 
@@ -300,11 +370,11 @@ def main():
 
     print("\n[3/4] Saving candidate trajectories...")
     tag = []
-    tag.append("p1")
+    tag.append(f"p1-{args.p1_joints}")
     if args.include_person2:
-        tag.append("p2")
+        tag.append(f"p2-{args.p2_joints}")
     if args.include_robot:
-        tag.append("robot")
+        tag.append(f"robot-{args.robot_joints}")
     tag = "_".join(tag)
 
     candi_file = os.path.join(

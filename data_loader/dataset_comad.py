@@ -8,6 +8,11 @@ from data_loader.comad_kinematics import (
     COMAD_P1_JOINTS_LEFT,
     COMAD_P1_JOINTS_RIGHT,
     COMAD_P1_PARENTS,
+    COMAD_PAPER_HUMAN_JOINT_INDICES,
+    COMAD_PAPER_HUMAN_JOINT_INDICES_11,
+    COMAD_PAPER_ROBOT_JOINT_INDICES,
+    COMAD_UPPER_BODY_11_VIS_LINKS,
+    COMAD_HH_VIS_LINKS,
     comad_p1_links,
 )
 
@@ -48,15 +53,49 @@ def _fit_joint_dim(arr, n_frames, target_joints):
     return np.concatenate([arr.astype(np.float32), pad], axis=1)
 
 
+def _parse_joint_indices(joint_indices):
+    if joint_indices is None:
+        return None
+    if isinstance(joint_indices, str):
+        text = joint_indices.strip()
+        if not text or text.lower() in {"none", "auto"}:
+            return None
+        return [int(x) for x in text.replace(",", " ").split()]
+    return [int(x) for x in joint_indices]
+
+
+def _fit_or_select_joint_dim(arr, n_frames, target_joints, joint_indices=None, fallback_indices=None):
+    if arr.ndim != 3 or arr.shape[0] != n_frames or arr.shape[2] != 3:
+        raise ValueError(f"Unexpected entity shape: {arr.shape}")
+
+    indices = _parse_joint_indices(joint_indices)
+    fallback = _parse_joint_indices(fallback_indices)
+    if indices is not None and len(indices) > 0:
+        max_idx = max(indices)
+        if arr.shape[1] > max_idx:
+            return _fit_joint_dim(arr[:, indices], n_frames, target_joints)
+        if fallback is not None and len(fallback) > 0 and arr.shape[1] > max(fallback):
+            return _fit_joint_dim(arr[:, fallback], n_frames, target_joints)
+        if arr.shape[1] == target_joints:
+            return arr.astype(np.float32)
+
+    return _fit_joint_dim(arr, n_frames, target_joints)
+
+
+def _entity_or_zeros_selected(seq_dict, key, n_frames, n_joints, joint_indices=None, fallback_indices=None):
+    if key not in seq_dict:
+        return np.zeros((n_frames, n_joints, 3), dtype=np.float32)
+    arr = np.asarray(seq_dict[key], dtype=np.float32)
+    return _fit_or_select_joint_dim(arr, n_frames, n_joints, joint_indices, fallback_indices)
+
+
 class DatasetCoMad(Dataset):
     """
     Data loader for CoMad dataset.
 
     CoMad sequence json format can vary across samples.
-    We normalize to fixed joint counts:
-      - Person_1: (T, 25, 3)
-      - Person_2: (T, 25, 3)
-      - Robot:    (T, 12, 3)
+    We normalize to configured fixed joint counts. The paper setup used by
+    cfg/comad.yml is Person_1=(T, 9, 3), Robot=(T, 2, 3).
     """
 
     def __init__(
@@ -67,12 +106,19 @@ class DatasetCoMad(Dataset):
         actions="all",
         use_vel=False,
         data_path="./datasets/CoMad",
-        include_person2=True,
+        include_person2=False,
         include_robot=True,
         use_data_aug=False,
         aug_rotate_prob=0.5,
         aug_reverse_prob=0.3,
         eval_interaction_filter=None,
+        p1_joints=9,
+        p2_joints=0,
+        robot_joints=2,
+        p1_joint_indices=COMAD_PAPER_HUMAN_JOINT_INDICES,
+        p1_fallback_joint_indices=COMAD_PAPER_HUMAN_JOINT_INDICES_11,
+        robot_joint_indices=COMAD_PAPER_ROBOT_JOINT_INDICES,
+        robot_fallback_joint_indices=(8, 9),
     ):
         # Subset of {'HH', 'HR'} from path .../<action>/<HH|HR>/<id>/; train should pass None.
         self.eval_interaction_filter = eval_interaction_filter
@@ -84,6 +130,19 @@ class DatasetCoMad(Dataset):
         self.use_data_aug = use_data_aug and mode == "train"
         self.aug_rotate_prob = aug_rotate_prob
         self.aug_reverse_prob = aug_reverse_prob
+        self.p1_joints = int(p1_joints)
+        self.p2_joints = int(p2_joints)
+        self.robot_joints = int(robot_joints)
+        self.p1_joint_indices = _parse_joint_indices(p1_joint_indices)
+        self.p1_fallback_joint_indices = _parse_joint_indices(p1_fallback_joint_indices)
+        self.robot_joint_indices = _parse_joint_indices(robot_joint_indices)
+        self.robot_fallback_joint_indices = _parse_joint_indices(robot_fallback_joint_indices)
+        if self.p1_joints <= 0:
+            raise ValueError(f"p1_joints must be positive, got {self.p1_joints}")
+        if self.include_person2 and self.p2_joints <= 0:
+            raise ValueError(f"p2_joints must be positive when include_person2=True, got {self.p2_joints}")
+        if self.include_robot and self.robot_joints <= 0:
+            raise ValueError(f"robot_joints must be positive when include_robot=True, got {self.robot_joints}")
 
         super().__init__(mode, t_his, t_pred, actions)
 
@@ -91,22 +150,29 @@ class DatasetCoMad(Dataset):
             self.traj_dim += 3
 
     def prepare_data(self):
-        # Fixed joint layout used for model input.
-        self.p1_joints = 25
-        self.p2_joints = 25
-        self.robot_joints = 12
+        # Person_1 / Person_2 topology for visualization metadata.
+        if self.p1_joints == 9:
+            p1_parents = [-1, 0, 0, 1, 2, 3, 4, 5, 6]
+            p1_links = list(COMAD_HH_VIS_LINKS)
+        elif self.p1_joints == 25:
+            p1_parents = list(COMAD_P1_PARENTS)
+            p1_links = comad_p1_links()
+        elif self.p1_joints == 11:
+            p1_parents = [-1, 0, 0, 2, 6, 6, 3, 3, 7, 8, 9]
+            p1_links = list(COMAD_UPPER_BODY_11_VIS_LINKS)
+        else:
+            p1_parents = [-1] + list(range(self.p1_joints - 1))
+            p1_links = [(j, p) for j, p in enumerate(p1_parents) if p != -1]
 
-        # Person_1 / Person_2: anatomical tree per official mapping.json order (not a linear chain).
-        p1_parents = list(COMAD_P1_PARENTS)
-        if len(p1_parents) != self.p1_joints:
-            raise ValueError(f"COMAD_P1_PARENTS length {len(p1_parents)} != p1_joints {self.p1_joints}")
-        p1_links = comad_p1_links()
-        p2_parents = list(COMAD_P1_PARENTS) if self.p2_joints == self.p1_joints else [-1] + list(range(self.p2_joints - 1))
-        p2_links = (
-            comad_p1_links()
-            if self.p2_joints == self.p1_joints
-            else [(j, p) for j, p in enumerate(p2_parents) if p != -1]
-        )
+        if self.p2_joints == self.p1_joints:
+            p2_parents = list(p1_parents)
+            p2_links = list(p1_links)
+        elif self.p2_joints == 25:
+            p2_parents = list(COMAD_P1_PARENTS)
+            p2_links = comad_p1_links()
+        else:
+            p2_parents = [-1] + list(range(max(self.p2_joints - 1, 0)))
+            p2_links = [(j, p) for j, p in enumerate(p2_parents) if p != -1]
         # Robot: keep sequential chain (Franka-like); visualization-only topology.
         robot_parents = [-1] + list(range(self.robot_joints - 1))
         robot_links = [(j, p) for j, p in enumerate(robot_parents) if p != -1]
@@ -131,9 +197,13 @@ class DatasetCoMad(Dataset):
 
         self.total_joints = len(all_parents)
         # Symmetric L/R lists for Skeleton (same length); arm coloring for P1/P2, coarse bands for robot.
-        joints_left = list(COMAD_P1_JOINTS_LEFT)
-        joints_right = list(COMAD_P1_JOINTS_RIGHT)
-        if self.include_person2 and self.num_p2_joints == self.p1_joints:
+        if self.p1_joints == 25:
+            joints_left = list(COMAD_P1_JOINTS_LEFT)
+            joints_right = list(COMAD_P1_JOINTS_RIGHT)
+        else:
+            joints_left = []
+            joints_right = []
+        if self.include_person2 and self.num_p2_joints == self.p1_joints and self.p1_joints == 25:
             shift = self.p1_joints
             joints_left.extend(j + shift for j in COMAD_P1_JOINTS_LEFT)
             joints_right.extend(j + shift for j in COMAD_P1_JOINTS_RIGHT)
@@ -202,15 +272,27 @@ class DatasetCoMad(Dataset):
                 print(f"[WARN] Skip file with invalid Person_1 shape {p1.shape}: {json_file}")
                 continue
             n_frames = p1.shape[0]
-            p1 = _fit_joint_dim(p1, n_frames, self.p1_joints)
+            p1 = _fit_or_select_joint_dim(
+                p1,
+                n_frames,
+                self.p1_joints,
+                self.p1_joint_indices,
+                self.p1_fallback_joint_indices,
+            )
             entities = [p1]
             if self.include_person2:
                 p2 = _entity_or_zeros(seq_dict, "Person_2", n_frames, self.p2_joints)
                 p2 = _fit_joint_dim(p2, n_frames, self.p2_joints)
                 entities.append(p2)
             if self.include_robot:
-                rb = _entity_or_zeros(seq_dict, "Robot", n_frames, self.robot_joints)
-                rb = _fit_joint_dim(rb, n_frames, self.robot_joints)
+                rb = _entity_or_zeros_selected(
+                    seq_dict,
+                    "Robot",
+                    n_frames,
+                    self.robot_joints,
+                    self.robot_joint_indices,
+                    fallback_indices=self.robot_fallback_joint_indices,
+                )
                 entities.append(rb)
 
             seq = np.concatenate(entities, axis=1)

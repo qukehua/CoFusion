@@ -15,8 +15,15 @@ class DatasetCoMad_multi(DatasetCoMad):
         actions="all",
         use_vel=False,
         data_path="./datasets/CoMad",
-        include_person2=True,
+        include_person2=False,
         include_robot=True,
+        p1_joints=9,
+        p2_joints=0,
+        robot_joints=2,
+        p1_joint_indices=None,
+        p1_fallback_joint_indices=None,
+        robot_joint_indices=None,
+        robot_fallback_joint_indices=None,
         **kwargs,
     ):
         self.multimodal_path = kwargs.get("multimodal_path", None)
@@ -31,6 +38,13 @@ class DatasetCoMad_multi(DatasetCoMad):
             include_person2=include_person2,
             include_robot=include_robot,
             eval_interaction_filter=kwargs.get("eval_interaction_filter", None),
+            p1_joints=kwargs.get("p1_joints", p1_joints),
+            p2_joints=kwargs.get("p2_joints", p2_joints),
+            robot_joints=kwargs.get("robot_joints", robot_joints),
+            p1_joint_indices=kwargs.get("p1_joint_indices", p1_joint_indices),
+            p1_fallback_joint_indices=kwargs.get("p1_fallback_joint_indices", p1_fallback_joint_indices),
+            robot_joint_indices=kwargs.get("robot_joint_indices", robot_joint_indices),
+            robot_fallback_joint_indices=kwargs.get("robot_fallback_joint_indices", robot_fallback_joint_indices),
         )
 
     def sample(self, n_modality=5):
