@@ -39,6 +39,7 @@ aug_reverse_prob: 0.2
 use_velocity_input: False
 velocity_loss_weight: 0.0
 
+
 # visualization settings
 vis_azim: 0.0
 vis_elev: 15.0
